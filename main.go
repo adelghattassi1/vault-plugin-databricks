@@ -2,8 +2,8 @@ package main
 
 import (
 	"os"
-	"vault-plugin-databricks/backend"
 
+	"github.com/adelghattassi1/vault-plugin-databricks/backend/backend"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/sdk/plugin"

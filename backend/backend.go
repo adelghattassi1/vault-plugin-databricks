@@ -19,15 +19,22 @@ type backend struct {
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := &backend{}
 	b.Backend = &framework.Backend{
-		Help: "Plugin to create Databricks on-behalf-of tokens",
+		Help: "Plugin to manage Databricks on-behalf-of tokens",
 		Paths: []*framework.Path{
 			b.pathCreateToken(),
+			b.pathReadToken(),
+			b.pathListTokens(),
+			b.pathUpdateToken(),
 		},
 	}
 	if err := b.Setup(ctx, conf); err != nil {
 		return nil, err
 	}
 	return b, nil
+}
+
+func (b *backend) Type() logical.BackendType {
+	return logical.TypeLogical
 }
 
 func (b *backend) pathCreateToken() *framework.Path {
@@ -63,11 +70,62 @@ func (b *backend) pathCreateToken() *framework.Path {
 	}
 }
 
-// tokenExists checks if a token exists
+func (b *backend) pathReadToken() *framework.Path {
+	return &framework.Path{
+		Pattern: "token/read/(?P<token_id>.+)",
+		Fields: map[string]*framework.FieldSchema{
+			"token_id": {
+				Type:        framework.TypeString,
+				Description: "The ID of the token to read.",
+			},
+		},
+		Operations: map[logical.Operation]framework.OperationHandler{
+			logical.ReadOperation: &framework.PathOperation{
+				Callback: b.handleReadToken,
+			},
+		},
+	}
+}
+
+func (b *backend) pathListTokens() *framework.Path {
+	return &framework.Path{
+		Pattern: "token/list",
+		Operations: map[logical.Operation]framework.OperationHandler{
+			logical.ListOperation: &framework.PathOperation{
+				Callback: b.handleListTokens,
+			},
+		},
+	}
+}
+
+func (b *backend) pathUpdateToken() *framework.Path {
+	return &framework.Path{
+		Pattern: "token/update/(?P<token_id>.+)",
+		Fields: map[string]*framework.FieldSchema{
+			"token_id": {
+				Type:        framework.TypeString,
+				Description: "The ID of the token to update.",
+			},
+			"comment": {
+				Type:        framework.TypeString,
+				Description: "Updated comment for the token.",
+			},
+		},
+		Operations: map[logical.Operation]framework.OperationHandler{
+			logical.UpdateOperation: &framework.PathOperation{
+				Callback: b.handleUpdateToken,
+			},
+		},
+	}
+}
+
 func (b *backend) tokenExists(ctx context.Context, req *logical.Request, d *framework.FieldData) (bool, error) {
-	// For simplicity, return false to allow creation
-	// Implement logic here if you have a way to check token existence
-	return false, nil
+	key := "tokens/" + d.Get("token_id").(string)
+	entry, err := req.Storage.Get(ctx, key)
+	if err != nil || entry == nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (b *backend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
@@ -113,7 +171,86 @@ func (b *backend) handleCreateToken(ctx context.Context, req *logical.Request, d
 		return nil, fmt.Errorf("failed to parse response: %v", err)
 	}
 
+	// Store the token information in the storage backend
+	key := fmt.Sprintf("tokens/%s", responseMap["token_info"].(map[string]interface{})["token_id"].(string))
+	entry := &logical.StorageEntry{
+		Key:   key,
+		Value: requestBody, // Store the request body or responseMap as needed
+	}
+	if err := req.Storage.Put(ctx, entry); err != nil {
+		return nil, fmt.Errorf("failed to store token: %v", err)
+	}
+
 	return &logical.Response{
 		Data: responseMap,
+	}, nil
+}
+
+func (b *backend) handleReadToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	tokenID := d.Get("token_id").(string)
+
+	// Retrieve token data from storage
+	entry, err := req.Storage.Get(ctx, "tokens/"+tokenID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read token: %v", err)
+	}
+	if entry == nil {
+		return nil, nil // Return nil if the token ID does not exist
+	}
+
+	var tokenData map[string]interface{}
+	if err := json.Unmarshal(entry.Value, &tokenData); err != nil {
+		return nil, fmt.Errorf("failed to parse token data: %v", err)
+	}
+
+	return &logical.Response{
+		Data: tokenData,
+	}, nil
+}
+
+func (b *backend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	keys, err := req.Storage.List(ctx, "tokens/")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tokens: %v", err)
+	}
+
+	return &logical.Response{
+		Data: map[string]interface{}{
+			"keys": keys,
+		},
+	}, nil
+}
+
+func (b *backend) handleUpdateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	tokenID := d.Get("token_id").(string)
+	newComment := d.Get("comment").(string)
+
+	// Retrieve token data from storage
+	entry, err := req.Storage.Get(ctx, "tokens/"+tokenID)
+	if err != nil || entry == nil {
+		return nil, fmt.Errorf("failed to find token: %v", err)
+	}
+
+	var tokenData map[string]interface{}
+	if err := json.Unmarshal(entry.Value, &tokenData); err != nil {
+		return nil, fmt.Errorf("failed to parse token data: %v", err)
+	}
+
+	// Update the comment
+	tokenData["comment"] = newComment
+
+	// Marshal the updated data and store it back
+	updatedValue, err := json.Marshal(tokenData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal updated token data: %v", err)
+	}
+
+	entry.Value = updatedValue
+	if err := req.Storage.Put(ctx, entry); err != nil {
+		return nil, fmt.Errorf("failed to update token: %v", err)
+	}
+
+	return &logical.Response{
+		Data: tokenData,
 	}, nil
 }
