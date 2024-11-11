@@ -160,7 +160,12 @@ func (b *backend) handleCreateToken(ctx context.Context, req *logical.Request, d
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform HTTP request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			// Log the error or handle it according to your needs
+			fmt.Printf("failed to close response body: %v\n", cerr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to create token, status code: %d", resp.StatusCode)
@@ -207,8 +212,7 @@ func (b *backend) handleReadToken(ctx context.Context, req *logical.Request, d *
 		Data: tokenData,
 	}, nil
 }
-
-func (b *backend) handleListTokens(ctx context.Context, req *logical.Request) (*logical.Response, error) {
+func (b *backend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	keys, err := req.Storage.List(ctx, "tokens/")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens: %v", err)
@@ -220,6 +224,7 @@ func (b *backend) handleListTokens(ctx context.Context, req *logical.Request) (*
 		},
 	}, nil
 }
+
 func (b *backend) handleUpdateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	tokenID := d.Get("token_id").(string)
 	newComment := d.Get("comment").(string)
