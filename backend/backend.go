@@ -208,7 +208,7 @@ func (b *backend) handleReadToken(ctx context.Context, req *logical.Request, d *
 	}, nil
 }
 
-func (b *backend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) handleListTokens(ctx context.Context, req *logical.Request) (*logical.Response, error) {
 	keys, err := req.Storage.List(ctx, "tokens/")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens: %v", err)
@@ -220,7 +220,6 @@ func (b *backend) handleListTokens(ctx context.Context, req *logical.Request, d 
 		},
 	}, nil
 }
-
 func (b *backend) handleUpdateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	tokenID := d.Get("token_id").(string)
 	newComment := d.Get("comment").(string)
