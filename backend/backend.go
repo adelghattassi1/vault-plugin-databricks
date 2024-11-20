@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -19,7 +20,8 @@ type backend struct {
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := &backend{}
 	b.Backend = &framework.Backend{
-		Help: "Plugin to manage Databricks on-behalf-of tokens",
+		BackendType: logical.TypeLogical,
+		Help:        "Plugin to manage Databricks on-behalf-of tokens",
 		Paths: []*framework.Path{
 			b.pathCreateToken(),
 			b.pathReadToken(),
@@ -27,10 +29,7 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 			b.pathUpdateToken(),
 		},
 	}
-	if err := b.Setup(ctx, conf); err != nil {
-		return nil, err
-	}
-	return b, nil
+	return b, b.Setup(ctx, conf)
 }
 
 func (b *backend) Type() logical.BackendType {
@@ -120,7 +119,8 @@ func (b *backend) pathUpdateToken() *framework.Path {
 }
 
 func (b *backend) tokenExists(ctx context.Context, req *logical.Request, d *framework.FieldData) (bool, error) {
-	key := "tokens/" + d.Get("token_id").(string)
+	tokenID := d.Get("token_id").(string)
+	key := fmt.Sprintf("tokens/%s", tokenID)
 	entry, err := req.Storage.Get(ctx, key)
 	if err != nil || entry == nil {
 		return false, nil
@@ -152,7 +152,11 @@ func (b *backend) handleCreateToken(ctx context.Context, req *logical.Request, d
 		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
 	}
 
-	httpReq.Header.Set("Authorization", "Bearer "+os.Getenv("DATABRICKS_TOKEN"))
+	databricksToken := os.Getenv("DATABRICKS_TOKEN")
+	if databricksToken == "" {
+		return nil, fmt.Errorf("DATABRICKS_TOKEN environment variable is not set")
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+databricksToken)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
@@ -160,30 +164,38 @@ func (b *backend) handleCreateToken(ctx context.Context, req *logical.Request, d
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform HTTP request: %v", err)
 	}
-	defer func() {
-		if cerr := resp.Body.Close(); cerr != nil {
-			// Log the error or handle it according to your needs
-			fmt.Printf("failed to close response body: %v\n", cerr)
-		}
-	}()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
 
+		}
+	}(resp.Body)
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to create token, status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("failed to create token, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var responseMap map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&responseMap); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %v", err)
+	if err := json.Unmarshal(bodyBytes, &responseMap); err != nil {
+		return nil, fmt.Errorf("failed to parse Databricks API response: %v", err)
 	}
 
-	// Store the token information in the storage backend
-	key := fmt.Sprintf("tokens/%s", responseMap["token_info"].(map[string]interface{})["token_id"].(string))
+	tokenInfo, ok := responseMap["token_info"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("Databricks API response missing token_info field")
+	}
+
+	tokenID := tokenInfo["token_id"].(string)
+
+	key := fmt.Sprintf("tokens/%s", tokenID)
 	entry := &logical.StorageEntry{
 		Key:   key,
-		Value: requestBody, // Store the request body or responseMap as needed
+		Value: bodyBytes,
 	}
+
 	if err := req.Storage.Put(ctx, entry); err != nil {
-		return nil, fmt.Errorf("failed to store token: %v", err)
+		return nil, fmt.Errorf("failed to store token in Vault: %v", err)
 	}
 
 	return &logical.Response{
@@ -194,24 +206,24 @@ func (b *backend) handleCreateToken(ctx context.Context, req *logical.Request, d
 func (b *backend) handleReadToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	tokenID := d.Get("token_id").(string)
 
-	// Retrieve token data from storage
-	entry, err := req.Storage.Get(ctx, "tokens/"+tokenID)
+	entry, err := req.Storage.Get(ctx, fmt.Sprintf("tokens/%s", tokenID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read token: %v", err)
 	}
 	if entry == nil {
-		return nil, nil // Return nil if the token ID does not exist
+		return nil, fmt.Errorf("token not found")
 	}
 
 	var tokenData map[string]interface{}
 	if err := json.Unmarshal(entry.Value, &tokenData); err != nil {
-		return nil, fmt.Errorf("failed to parse token data: %v", err)
+		return nil, fmt.Errorf("failed to parse stored token data: %v", err)
 	}
 
 	return &logical.Response{
 		Data: tokenData,
 	}, nil
 }
+
 func (b *backend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	keys, err := req.Storage.List(ctx, "tokens/")
 	if err != nil {
@@ -229,8 +241,7 @@ func (b *backend) handleUpdateToken(ctx context.Context, req *logical.Request, d
 	tokenID := d.Get("token_id").(string)
 	newComment := d.Get("comment").(string)
 
-	// Retrieve token data from storage
-	entry, err := req.Storage.Get(ctx, "tokens/"+tokenID)
+	entry, err := req.Storage.Get(ctx, fmt.Sprintf("tokens/%s", tokenID))
 	if err != nil || entry == nil {
 		return nil, fmt.Errorf("failed to find token: %v", err)
 	}
@@ -240,10 +251,8 @@ func (b *backend) handleUpdateToken(ctx context.Context, req *logical.Request, d
 		return nil, fmt.Errorf("failed to parse token data: %v", err)
 	}
 
-	// Update the comment
 	tokenData["comment"] = newComment
 
-	// Marshal the updated data and store it back
 	updatedValue, err := json.Marshal(tokenData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal updated token data: %v", err)
