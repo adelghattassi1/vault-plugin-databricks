@@ -1,4 +1,4 @@
-module vault-plugin-databricks
+module github.com/adelghattassi1/vault-plugin-databricks
 
 go 1.22.7
 
