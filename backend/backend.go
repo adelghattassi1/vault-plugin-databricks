@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 
@@ -170,8 +171,16 @@ func (b *backend) handleCreateToken(ctx context.Context, req *logical.Request, d
 
 		}
 	}(resp.Body)
+	// Read and check the response body
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("failed to read response body: %v", err)
+		return nil, fmt.Errorf("failed to read response body: %v", err)
+	}
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
+	// Debugging: Log the response body
+	log.Printf("Response Status: %d, Body: %s", resp.StatusCode, string(bodyBytes))
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to create token, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
 	}
