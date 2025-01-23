@@ -10,23 +10,29 @@ import (
 )
 
 func main() {
-	logger := hclog.New(&hclog.LoggerOptions{})
+	apiClientMeta := &api.PluginAPIClientMeta{}
 
-	if err := run(logger); err != nil {
-		logger.Error("plugin shutting down", "error", err)
-		os.Exit(1)
+	flags := apiClientMeta.FlagSet()
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		fatalErr(err)
+	}
+
+	tlsConfig := apiClientMeta.GetTLSConfig()
+	tlsProviderFunc := api.VaultPluginTLSProvider(tlsConfig)
+
+	if err := plugin.ServeMultiplex(&plugin.ServeOpts{
+		BackendFactoryFunc: backend.Factory,
+		TLSProviderFunc:    tlsProviderFunc,
+	}); err != nil {
+		fatalErr(err)
 	}
 }
 
-func run(logger hclog.Logger) error {
-	meta := &api.PluginAPIClientMeta{}
-	if err := meta.FlagSet().Parse(os.Args[1:]); err != nil {
-		return err
-	}
-
-	return plugin.Serve(&plugin.ServeOpts{
-		TLSProviderFunc:    api.VaultPluginTLSProvider(meta.GetTLSConfig()),
-		BackendFactoryFunc: backend.Factory,
-		Logger:             logger,
-	})
+func fatalErr(err error) {
+	hclog.New(&hclog.LoggerOptions{}).Error(
+		"plugin shutting down",
+		"error",
+		err,
+	)
+	os.Exit(1)
 }

@@ -18,7 +18,7 @@ type backend struct {
 }
 
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
-	b := &backend{}
+	b := new(backend)
 	b.Backend = &framework.Backend{
 		BackendType: logical.TypeLogical,
 		Help:        "Plugin to manage Databricks on-behalf-of tokens",
@@ -183,7 +183,7 @@ func (b *backend) handleCreateToken(ctx context.Context, req *logical.Request, d
 
 	tokenInfo, ok := responseMap["token_info"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("Databricks API response missing token_info field")
+		return nil, fmt.Errorf("databricks API response missing token_info field")
 	}
 
 	tokenID := tokenInfo["token_id"].(string)
