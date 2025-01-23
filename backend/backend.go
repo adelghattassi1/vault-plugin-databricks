@@ -17,6 +17,9 @@ type backend struct {
 	*framework.Backend
 }
 
+const backendSecretType = "databricks_token"
+const projectVersion = "v0.1.0+external"
+
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := new(backend)
 	b.Backend = &framework.Backend{
@@ -28,6 +31,17 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 			b.pathListTokens(),
 			b.pathUpdateToken(),
 		},
+		Secrets: []*framework.Secret{{
+			Type: backendSecretType,
+			Fields: map[string]*framework.FieldSchema{
+				"token": {
+					Type:        framework.TypeString,
+					Description: "databricks token.",
+				},
+			},
+		}},
+		Invalidate:     b.Invalidate,
+		RunningVersion: projectVersion,
 	}
 	return b, b.Setup(ctx, conf)
 }
