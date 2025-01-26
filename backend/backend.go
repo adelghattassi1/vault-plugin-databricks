@@ -1,4 +1,4 @@
-package databrickstoken
+package backend
 
 import (
 	"bytes"
@@ -99,14 +99,14 @@ func (b *DatabricksBackend) pathConfig() *framework.Path {
 }
 
 func (b *DatabricksBackend) handleWriteConfig(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	databricksToken, ok := data.GetOk("databricks_token")
+	backend, ok := data.GetOk("databricks_token")
 	if !ok {
 		return nil, fmt.Errorf("missing databricks_token in request")
 	}
 
 	entry := &logical.StorageEntry{
 		Key:   pathPatternConfig,
-		Value: []byte(databricksToken.(string)),
+		Value: []byte(backend.(string)),
 	}
 
 	if err := req.Storage.Put(ctx, entry); err != nil {
@@ -198,11 +198,11 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
 	}
 
-	databricksToken := os.Getenv("DATABRICKS_TOKEN")
-	if databricksToken == "" {
+	backend := os.Getenv("DATABRICKS_TOKEN")
+	if backend == "" {
 		return nil, fmt.Errorf("DATABRICKS_TOKEN environment variable is not set")
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+databricksToken)
+	httpReq.Header.Set("Authorization", "Bearer "+backend)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	client := b.getClient()
