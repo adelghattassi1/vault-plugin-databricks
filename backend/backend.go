@@ -2,8 +2,10 @@ package backend
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/locksutil"
@@ -12,9 +14,19 @@ import (
 
 type DatabricksBackend struct {
 	*framework.Backend
+	client    *http.Client
 	view      logical.Storage
 	lock      sync.RWMutex
 	roleLocks []*locksutil.LockEntry
+}
+
+func (b *DatabricksBackend) getClient() *http.Client {
+	if b.client == nil {
+		b.client = &http.Client{
+			Timeout: 10 * time.Second, // Set a reasonable timeout
+		}
+	}
+	return b.client
 }
 
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
