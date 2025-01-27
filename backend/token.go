@@ -11,31 +11,34 @@ import (
 	"net/http"
 )
 
-func (b *DatabricksBackend) pathCreateToken() *framework.Path {
-	return &framework.Path{
-		Pattern: "token/create",
-		Fields: map[string]*framework.FieldSchema{
-			"application_id": {
-				Type:        framework.TypeString,
-				Description: "Application ID of the service principal.",
-				Required:    true,
+func pathCreateToken(b *DatabricksBackend) []*framework.Path {
+	paths := []*framework.Path{
+		{
+			Pattern: "token/create",
+			Fields: map[string]*framework.FieldSchema{
+				"application_id": {
+					Type:        framework.TypeString,
+					Description: "Application ID of the service principal.",
+					Required:    true,
+				},
+				"lifetime_seconds": {
+					Type:        framework.TypeInt,
+					Description: "The number of seconds before the token expires.",
+					Required:    true,
+				},
+				"comment": {
+					Type:        framework.TypeString,
+					Description: "Comment that describes the purpose of the token.",
+				},
 			},
-			"lifetime_seconds": {
-				Type:        framework.TypeInt,
-				Description: "The number of seconds before the token expires.",
-				Required:    true,
-			},
-			"comment": {
-				Type:        framework.TypeString,
-				Description: "Comment that describes the purpose of the token.",
-			},
-		},
-		Operations: map[logical.Operation]framework.OperationHandler{
-			logical.CreateOperation: &framework.PathOperation{
-				Callback: b.handleCreateToken,
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.CreateOperation: &framework.PathOperation{
+					Callback: b.handleCreateToken,
+				},
 			},
 		},
 	}
+	return paths
 }
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
@@ -130,21 +133,24 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		Data: responseMap,
 	}, nil
 }
-func (b *DatabricksBackend) pathReadToken() *framework.Path {
-	return &framework.Path{
-		Pattern: "token/read/(?P<token_id>.+)",
-		Fields: map[string]*framework.FieldSchema{
-			"token_id": {
-				Type:        framework.TypeString,
-				Description: "The ID of the token to read.",
+func pathReadToken(b *DatabricksBackend) []*framework.Path {
+	paths := []*framework.Path{
+		{
+			Pattern: "token/read/(?P<token_id>.+)",
+			Fields: map[string]*framework.FieldSchema{
+				"token_id": {
+					Type:        framework.TypeString,
+					Description: "The ID of the token to read.",
+				},
 			},
-		},
-		Operations: map[logical.Operation]framework.OperationHandler{
-			logical.ReadOperation: &framework.PathOperation{
-				Callback: b.handleReadToken,
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: b.handleReadToken,
+				},
 			},
 		},
 	}
+	return paths
 }
 
 func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
@@ -171,15 +177,18 @@ func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Re
 	}, nil
 }
 
-func (b *DatabricksBackend) pathListTokens() *framework.Path {
-	return &framework.Path{
-		Pattern: "token/list",
-		Operations: map[logical.Operation]framework.OperationHandler{
-			logical.ListOperation: &framework.PathOperation{
-				Callback: b.handleListTokens,
+func pathListTokens(b *DatabricksBackend) []*framework.Path {
+	paths := []*framework.Path{
+		{
+			Pattern: "token/list",
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ListOperation: &framework.PathOperation{
+					Callback: b.handleListTokens,
+				},
 			},
 		},
 	}
+	return paths
 }
 
 func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
@@ -195,25 +204,28 @@ func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.R
 	}, nil
 }
 
-func (b *DatabricksBackend) pathUpdateToken() *framework.Path {
-	return &framework.Path{
-		Pattern: "token/update/(?P<token_id>.+)",
-		Fields: map[string]*framework.FieldSchema{
-			"token_id": {
-				Type:        framework.TypeString,
-				Description: "The ID of the token to update.",
+func pathUpdateToken(b *DatabricksBackend) []*framework.Path {
+	paths := []*framework.Path{
+		{
+			Pattern: "token/update/(?P<token_id>.+)",
+			Fields: map[string]*framework.FieldSchema{
+				"token_id": {
+					Type:        framework.TypeString,
+					Description: "The ID of the token to update.",
+				},
+				"comment": {
+					Type:        framework.TypeString,
+					Description: "Updated comment for the token.",
+				},
 			},
-			"comment": {
-				Type:        framework.TypeString,
-				Description: "Updated comment for the token.",
-			},
-		},
-		Operations: map[logical.Operation]framework.OperationHandler{
-			logical.UpdateOperation: &framework.PathOperation{
-				Callback: b.handleUpdateToken,
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.handleUpdateToken,
+				},
 			},
 		},
 	}
+	return paths
 }
 
 func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
