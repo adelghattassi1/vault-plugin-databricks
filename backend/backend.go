@@ -49,9 +49,6 @@ func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 		Paths: framework.PathAppend(
 			pathConfig(backend),
 			pathCreateToken(backend),
-			pathListTokens(backend),
-			pathUpdateToken(backend),
-			pathReadToken(backend),
 		),
 	}
 
