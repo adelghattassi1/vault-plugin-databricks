@@ -48,6 +48,7 @@ func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 		Help:        strings.TrimSpace(backendHelp),
 		Paths: framework.PathAppend(
 			pathConfig(backend),
+			pathCreateToken(backend),
 		),
 	}
 

@@ -32,7 +32,7 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.CreateOperation: &framework.PathOperation{
+				logical.UpdateOperation: &framework.PathOperation{
 					Callback: b.handleCreateToken,
 				},
 			},
@@ -44,10 +44,10 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	config, err := getConfig(ctx, req.Storage)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load configuration: %v", err)
+		return nil, err
 	}
 	if config == nil {
-		return nil, fmt.Errorf("configuration not set")
+		config = &ConfigStorageEntry{}
 	}
 
 	// Use configuration for Databricks URL and token
