@@ -2,62 +2,31 @@ package backend
 
 import (
 	"context"
-	"fmt"
+	"time"
 
-	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
-const pathPatternConfig = "config/"
-
-func (b *DatabricksBackend) pathConfig() *framework.Path {
-	return &framework.Path{
-		Pattern: pathPatternConfig,
-		Fields: map[string]*framework.FieldSchema{
-			"databricks_token": {
-				Type:        framework.TypeString,
-				Description: "Databricks token used for authentication.",
-			},
-		},
-		Callbacks: map[logical.Operation]framework.OperationFunc{
-			logical.UpdateOperation: b.handleWriteConfig,
-			logical.CreateOperation: b.handleWriteConfig,
-			logical.ReadOperation:   b.handleReadConfig,
-		},
-		HelpSynopsis: "This path allows you to configure Databricks settings for token management.",
-	}
+// ConfigStorageEntry structure represents the config as it is stored within vault
+type ConfigStorageEntry struct {
+	BaseURL string        `json:"base_url" structs:"base_url" mapstructure:"base_url"`
+	Token   string        `json:"token" structs:"token" mapstructure:"token"`
+	MaxTTL  time.Duration `json:"max_ttl" structs:"max_ttl" mapstructure:"max_ttl"`
 }
 
-func (b *DatabricksBackend) handleWriteConfig(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	databricksToken, ok := data.GetOk("databricks_token")
-	if !ok {
-		return nil, fmt.Errorf("missing databricks_token in request")
-	}
-
-	entry := &logical.StorageEntry{
-		Key:   pathPatternConfig,
-		Value: []byte(databricksToken.(string)),
-	}
-
-	if err := req.Storage.Put(ctx, entry); err != nil {
-		return nil, fmt.Errorf("failed to store configuration: %v", err)
-	}
-
-	return nil, nil
-}
-
-func (b *DatabricksBackend) handleReadConfig(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	entry, err := req.Storage.Get(ctx, pathPatternConfig)
+func getConfig(ctx context.Context, s logical.Storage) (*ConfigStorageEntry, error) {
+	var config ConfigStorageEntry
+	configRaw, err := s.Get(ctx, pathPatternConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read configuration: %v", err)
+		return nil, err
 	}
-	if entry == nil {
-		return nil, fmt.Errorf("configuration not found")
+	if configRaw == nil {
+		return nil, nil
 	}
 
-	return &logical.Response{
-		Data: map[string]interface{}{
-			"databricks_token": string(entry.Value),
-		},
-	}, nil
+	if err := configRaw.DecodeJSON(&config); err != nil {
+		return nil, err
+	}
+
+	return &config, err
 }

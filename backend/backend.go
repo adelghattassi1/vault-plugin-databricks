@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"sync"
 
@@ -13,7 +12,7 @@ import (
 
 type DatabricksBackend struct {
 	*framework.Backend
-	client    *http.Client
+	view      logical.Storage
 	lock      sync.RWMutex
 	roleLocks []*locksutil.LockEntry
 }
@@ -28,38 +27,19 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 
 func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 	backend := &DatabricksBackend{
+		view:      conf.StorageView,
 		roleLocks: locksutil.CreateLocks(),
-		client:    &http.Client{},
 	}
 
 	backend.Backend = &framework.Backend{
 		BackendType: logical.TypeLogical,
 		Help:        strings.TrimSpace(backendHelp),
-		Paths: []*framework.Path{
-			backend.pathConfig(),
-			backend.pathCreateToken(),
-			backend.pathReadToken(),
-			backend.pathListTokens(),
-			backend.pathUpdateToken(),
-		},
-		Invalidate: backend.invalidate,
+		Paths: framework.PathAppend(
+			pathConfig(backend),
+		),
 	}
 
 	return backend
-}
-
-func (b *DatabricksBackend) invalidate(ctx context.Context, key string) {
-	switch key {
-	case pathPatternConfig:
-		b.reset()
-	}
-}
-
-func (b *DatabricksBackend) reset() {
-	b.lock.Lock()
-	defer b.lock.Unlock()
-
-	b.client = nil
 }
 
 const backendHelp = `
