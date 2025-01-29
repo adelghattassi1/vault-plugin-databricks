@@ -43,45 +43,20 @@ func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 	}
 }
 
-func (b *DatabricksBackend) pathConfigList() []*framework.Path {
-	return []*framework.Path{
-		{
-			Pattern: "config/?",
-			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.ListOperation: &framework.PathOperation{
-					Callback: b.handleConfigList,
-				},
-			},
-		},
-	}
-}
-
-func (b *DatabricksBackend) handleConfigList(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	keys, err := req.Storage.List(ctx, "config/")
+func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	config, err := getConfig(ctx, req.Storage)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list configurations: %v", err)
+		return nil, err
+	}
+	if config == nil {
+		return nil, nil
 	}
 
 	return &logical.Response{
-		Data: map[string]interface{}{
-			"keys": keys,
-		},
+		Data: configDetail(config),
 	}, nil
 }
 
-//	func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-//		config, err := getConfig(ctx, req.Storage)
-//		if err != nil {
-//			return nil, err
-//		}
-//		if config == nil {
-//			return nil, nil
-//		}
-//
-//		return &logical.Response{
-//			Data: configDetail(config),
-//		}, nil
-//	}
 func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	warnings := []string{}
 
@@ -119,6 +94,13 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 		warnings = append(warnings, NoTTLWarning("max_ttl"))
 	}
 
+	// maxTTLRaw, ok := data.GetOk("max_ttl")
+	// if ok && maxTTLRaw.(int) > 0 {
+	// 	config.MaxTTL = time.Duration(maxTTLRaw.(int)) * time.Second
+	// } else if config.MaxTTL == time.Duration(0) {
+	// 	config.MaxTTL = time.Duration(configSchema["max_ttl"].Default.(int)) * time.Second
+	// }
+
 	entry, err := logical.StorageEntryJSON(pathPatternConfig, config)
 	if err != nil {
 		return nil, err
@@ -134,96 +116,28 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 	}, nil
 }
 
-//func pathConfig(b *DatabricksBackend) []*framework.Path {
-//	paths := []*framework.Path{
-//		{
-//			Pattern: pathPatternConfig,
-//			Fields:  configSchema,
-//
-//			Operations: map[logical.Operation]framework.OperationHandler{
-//				logical.ReadOperation: &framework.PathOperation{
-//					Callback: b.pathConfigRead,
-//				},
-//				logical.UpdateOperation: &framework.PathOperation{
-//					Callback: b.pathConfigWrite,
-//					Examples: configExamples,
-//				},
-//			},
-//
-//			HelpSynopsis:    pathConfigHelpSyn,
-//			HelpDescription: pathConfigHelpDesc,
-//		},
-//	}
-//
-//	return paths
-//}
-
 func pathConfig(b *DatabricksBackend) []*framework.Path {
 	paths := []*framework.Path{
 		{
-			Pattern: "config/(?P<name>.+)",
+			Pattern: pathPatternConfig,
 			Fields:  configSchema,
+
 			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.CreateOperation: &framework.PathOperation{
-					Callback: b.handleConfigWrite,
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: b.pathConfigRead,
 				},
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.handleConfigWrite,
+					Callback: b.pathConfigWrite,
 					Examples: configExamples,
 				},
-				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.handleConfigRead,
-				},
 			},
+
 			HelpSynopsis:    pathConfigHelpSyn,
 			HelpDescription: pathConfigHelpDesc,
 		},
 	}
+
 	return paths
-}
-
-func (b *DatabricksBackend) handleConfigWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	name := d.Get("name").(string)
-
-	config := &ConfigStorageEntry{
-		BaseURL: d.Get("base_url").(string),
-		Token:   d.Get("token").(string),
-		MaxTTL:  time.Duration(d.Get("max_ttl").(int)) * time.Second,
-	}
-	entry, err := logical.StorageEntryJSON("config/"+name, config)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := req.Storage.Put(ctx, entry); err != nil {
-		return nil, err
-	}
-
-	return &logical.Response{
-		Data: configDetail(config),
-	}, nil
-}
-
-func (b *DatabricksBackend) handleConfigRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	name := d.Get("name").(string)
-
-	entry, err := req.Storage.Get(ctx, "config/"+name)
-	if err != nil || entry == nil {
-		return nil, fmt.Errorf("failed to retrieve configuration")
-	}
-
-	var config ConfigStorageEntry
-	if err := entry.DecodeJSON(&config); err != nil {
-		return nil, err
-	}
-
-	return &logical.Response{
-		Data: map[string]interface{}{
-			"base_url": config.BaseURL,
-			"token":    config.Token,
-			"max_ttl":  config.MaxTTL.Seconds(),
-		},
-	}, nil
 }
 
 const pathConfigHelpSyn = `
