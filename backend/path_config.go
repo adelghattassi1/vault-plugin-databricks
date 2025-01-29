@@ -20,6 +20,11 @@ func LT24HourTTLWarning(s string) string {
 // schema for the configuring Gitlab token plugin, this will map the fields coming in from the
 // vault request field map
 var configSchema = map[string]*framework.FieldSchema{
+	"name": {
+		Type:        framework.TypeString,
+		Description: `The name of the configuration.`,
+		Required:    true,
+	},
 	"base_url": {
 		Type:        framework.TypeString,
 		Description: `databricks base url`,
