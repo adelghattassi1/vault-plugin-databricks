@@ -69,78 +69,70 @@ func (b *DatabricksBackend) handleConfigList(ctx context.Context, req *logical.R
 	}, nil
 }
 
-//func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-//	config, err := getConfig(ctx, req.Storage)
-//	if err != nil {
-//		return nil, err
-//	}
-//	if config == nil {
-//		return nil, nil
-//	}
-//
-//	return &logical.Response{
-//		Data: configDetail(config),
-//	}, nil
-//}
-//
-//func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-//	warnings := []string{}
-//
-//	config, err := getConfig(ctx, req.Storage)
-//	if err != nil {
-//		return nil, err
-//	}
-//	if config == nil {
-//		config = &ConfigStorageEntry{}
-//	}
-//
-//	baseURL, ok := data.GetOk("base_url")
-//	if ok {
-//		config.BaseURL = baseURL.(string)
-//	} else if config.BaseURL == "" {
-//		config.BaseURL = configSchema["base_url"].Default.(string)
-//	}
-//
-//	if token, ok := data.GetOk("token"); ok {
-//		config.Token = token.(string)
-//	}
-//
-//	maxTTLRaw, ok := data.GetOk("max_ttl")
-//	if ok && maxTTLRaw.(int) > 0 {
-//		// Until Gitlab implements granular token expiry.
-//		// bounce anything less than 24 hours
-//		if maxTTLRaw.(int) < (24 * 3600) {
-//			warnings = append(warnings, LT24HourTTLWarning("max_ttl"))
-//		} else {
-//			config.MaxTTL = time.Duration(maxTTLRaw.(int)) * time.Second
+//	func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+//		config, err := getConfig(ctx, req.Storage)
+//		if err != nil {
+//			return nil, err
 //		}
+//		if config == nil {
+//			return nil, nil
+//		}
+//
+//		return &logical.Response{
+//			Data: configDetail(config),
+//		}, nil
 //	}
-//
-//	if config.MaxTTL == 0 {
-//		warnings = append(warnings, NoTTLWarning("max_ttl"))
-//	}
-//
-//	// maxTTLRaw, ok := data.GetOk("max_ttl")
-//	// if ok && maxTTLRaw.(int) > 0 {
-//	// 	config.MaxTTL = time.Duration(maxTTLRaw.(int)) * time.Second
-//	// } else if config.MaxTTL == time.Duration(0) {
-//	// 	config.MaxTTL = time.Duration(configSchema["max_ttl"].Default.(int)) * time.Second
-//	// }
-//
-//	entry, err := logical.StorageEntryJSON(pathPatternConfig, config)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	if err := req.Storage.Put(ctx, entry); err != nil {
-//		return nil, err
-//	}
-//
-//	return &logical.Response{
-//		Data:     configDetail(config),
-//		Warnings: warnings,
-//	}, nil
-//}
+func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	warnings := []string{}
+
+	config, err := getConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if config == nil {
+		config = &ConfigStorageEntry{}
+	}
+
+	baseURL, ok := data.GetOk("base_url")
+	if ok {
+		config.BaseURL = baseURL.(string)
+	} else if config.BaseURL == "" {
+		config.BaseURL = configSchema["base_url"].Default.(string)
+	}
+
+	if token, ok := data.GetOk("token"); ok {
+		config.Token = token.(string)
+	}
+
+	maxTTLRaw, ok := data.GetOk("max_ttl")
+	if ok && maxTTLRaw.(int) > 0 {
+		// Until Gitlab implements granular token expiry.
+		// bounce anything less than 24 hours
+		if maxTTLRaw.(int) < (24 * 3600) {
+			warnings = append(warnings, LT24HourTTLWarning("max_ttl"))
+		} else {
+			config.MaxTTL = time.Duration(maxTTLRaw.(int)) * time.Second
+		}
+	}
+
+	if config.MaxTTL == 0 {
+		warnings = append(warnings, NoTTLWarning("max_ttl"))
+	}
+
+	entry, err := logical.StorageEntryJSON(pathPatternConfig, config)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := req.Storage.Put(ctx, entry); err != nil {
+		return nil, err
+	}
+
+	return &logical.Response{
+		Data:     configDetail(config),
+		Warnings: warnings,
+	}, nil
+}
 
 //func pathConfig(b *DatabricksBackend) []*framework.Path {
 //	paths := []*framework.Path{
@@ -198,7 +190,6 @@ func (b *DatabricksBackend) handleConfigWrite(ctx context.Context, req *logical.
 		Token:   d.Get("token").(string),
 		MaxTTL:  time.Duration(d.Get("max_ttl").(int)) * time.Second,
 	}
-
 	entry, err := logical.StorageEntryJSON("config/"+name, config)
 	if err != nil {
 		return nil, err
@@ -208,7 +199,9 @@ func (b *DatabricksBackend) handleConfigWrite(ctx context.Context, req *logical.
 		return nil, err
 	}
 
-	return &logical.Response{}, nil
+	return &logical.Response{
+		Data: configDetail(config),
+	}, nil
 }
 
 func (b *DatabricksBackend) handleConfigRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
