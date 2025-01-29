@@ -123,7 +123,7 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 func pathConfig(b *DatabricksBackend) []*framework.Path {
 	paths := []*framework.Path{
 		{
-			Pattern: fmt.Sprintf("%s/%s", pathPatternConfig, framework.GenericNameRegex("name")),
+			Pattern: "config/(?P<name>.+)",
 			Fields:  configSchema,
 
 			Operations: map[logical.Operation]framework.OperationHandler{
