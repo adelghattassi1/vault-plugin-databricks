@@ -12,10 +12,15 @@ import (
 )
 
 func pathCreateToken(b *DatabricksBackend) []*framework.Path {
-	paths := []*framework.Path{
+	return []*framework.Path{
 		{
-			Pattern: "token/create",
+			Pattern: "token",
 			Fields: map[string]*framework.FieldSchema{
+				"config_name": {
+					Type:        framework.TypeString,
+					Description: "Name of the configuration to use for token creation.",
+					Required:    true,
+				},
 				"application_id": {
 					Type:        framework.TypeString,
 					Description: "Application ID of the service principal.",
@@ -38,22 +43,32 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 			},
 		},
 	}
-	return paths
 }
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	config, err := getConfig(ctx, req.Storage, d)
-	if err != nil {
-		return nil, err
+	configName, ok := d.GetOk("config_name")
+	if !ok {
+		return nil, fmt.Errorf("config_name not provided")
 	}
-	if config == nil {
-		config = &ConfigStorageEntry{}
+	configNameStr := configName.(string)
+
+	entry, err := req.Storage.Get(ctx, "config/"+configNameStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve configuration: %v", err)
+	}
+	if entry == nil {
+		return nil, fmt.Errorf("configuration not found with name: %s", configNameStr)
 	}
 
-	// Use configuration for Databricks URL and token
+	var config ConfigStorageEntry
+	if err := entry.DecodeJSON(&config); err != nil {
+		return nil, fmt.Errorf("error decoding configuration: %v", err)
+	}
+
 	databricksInstance := config.BaseURL
 	databricksToken := config.Token
 
+	// Retrieve token creation parameters
 	applicationID, ok := d.GetOk("application_id")
 	if !ok {
 		return nil, fmt.Errorf("application_id not provided")
@@ -62,9 +77,9 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	if !ok {
 		return nil, fmt.Errorf("lifetime_seconds not provided")
 	}
-
 	comment, _ := d.GetOk("comment") // Comment is optional
 
+	// Prepare the request payload
 	requestPayload := map[string]interface{}{
 		"application_id":   applicationID.(string),
 		"lifetime_seconds": lifetimeSeconds.(int),
@@ -78,24 +93,25 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 
 	apiURL := fmt.Sprintf("%s/api/2.0/token-management/on-behalf-of/tokens", databricksInstance)
 
+	// Create and configure the HTTP request
 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
 	}
-
 	if databricksToken == "" {
 		return nil, fmt.Errorf("Databricks token not configured")
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+databricksToken)
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	client := b.getClient()
+	client := b.getClient() // Assume b.getClient() returns an *http.Client
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform HTTP request: %v", err)
 	}
 	defer resp.Body.Close()
 
+	// Read and process the response
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %v", err)
@@ -111,7 +127,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 
 	tokenInfo, ok := responseMap["token_info"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("Databricks API response missing token_info field")
+		return nil, fmt.Errorf("databricks API response missing token_info field")
 	}
 
 	tokenID, ok := tokenInfo["token_id"].(string)
@@ -119,13 +135,14 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("token_info field missing token_id")
 	}
 
-	key := fmt.Sprintf("tokens/%s", tokenID)
-	entry := &logical.StorageEntry{
+	key := fmt.Sprintf("tokens/%s/%s", configNameStr, tokenID)
+
+	tokenEntry := &logical.StorageEntry{
 		Key:   key,
 		Value: bodyBytes,
 	}
 
-	if err := req.Storage.Put(ctx, entry); err != nil {
+	if err := req.Storage.Put(ctx, tokenEntry); err != nil {
 		return nil, fmt.Errorf("failed to store token in Vault: %v", err)
 	}
 
@@ -133,11 +150,16 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		Data: responseMap,
 	}, nil
 }
+
 func pathReadToken(b *DatabricksBackend) []*framework.Path {
-	paths := []*framework.Path{
+	return []*framework.Path{
 		{
-			Pattern: "token/read/(?P<token_id>.+)",
+			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_id>[^/]+)",
 			Fields: map[string]*framework.FieldSchema{
+				"config_name": {
+					Type:        framework.TypeString,
+					Description: "The name of the configuration under which the token is stored.",
+				},
 				"token_id": {
 					Type:        framework.TypeString,
 					Description: "The ID of the token to read.",
@@ -150,21 +172,25 @@ func pathReadToken(b *DatabricksBackend) []*framework.Path {
 			},
 		},
 	}
-	return paths
 }
 
 func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	configName, ok := d.GetOk("config_name")
+	if !ok {
+		return nil, fmt.Errorf("config_name not provided")
+	}
+
 	tokenID, ok := d.GetOk("token_id")
 	if !ok {
 		return nil, fmt.Errorf("token_id not provided")
 	}
 
-	entry, err := req.Storage.Get(ctx, fmt.Sprintf("tokens/%s", tokenID.(string)))
+	entry, err := req.Storage.Get(ctx, fmt.Sprintf("tokens/%s/%s", configName.(string), tokenID.(string)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read token: %v", err)
 	}
 	if entry == nil {
-		return nil, fmt.Errorf("token not found")
+		return nil, fmt.Errorf("token not found for config: %s", configName.(string))
 	}
 
 	var tokenData map[string]interface{}
@@ -178,9 +204,15 @@ func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Re
 }
 
 func pathListTokens(b *DatabricksBackend) []*framework.Path {
-	paths := []*framework.Path{
+	return []*framework.Path{
 		{
-			Pattern: "token/list",
+			Pattern: "tokens/(?P<config_name>[^/]+)",
+			Fields: map[string]*framework.FieldSchema{
+				"config_name": {
+					Type:        framework.TypeString,
+					Description: "The name of the configuration to list tokens for.",
+				},
+			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
 					Callback: b.handleListTokens,
@@ -188,13 +220,17 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 			},
 		},
 	}
-	return paths
 }
 
 func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	keys, err := req.Storage.List(ctx, "tokens/")
+	configName, ok := d.GetOk("config_name")
+	if !ok {
+		return nil, fmt.Errorf("config_name not provided")
+	}
+
+	keys, err := req.Storage.List(ctx, fmt.Sprintf("tokens/%s/", configName.(string)))
 	if err != nil {
-		return nil, fmt.Errorf("failed to list tokens: %v", err)
+		return nil, fmt.Errorf("failed to list tokens for config: %s", configName.(string))
 	}
 
 	return &logical.Response{
@@ -205,10 +241,14 @@ func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.R
 }
 
 func pathUpdateToken(b *DatabricksBackend) []*framework.Path {
-	paths := []*framework.Path{
+	return []*framework.Path{
 		{
-			Pattern: "token/update/(?P<token_id>.+)",
+			Pattern: "token/update/(?P<config_name>[^/]+)/(?P<token_id>[^/]+)",
 			Fields: map[string]*framework.FieldSchema{
+				"config_name": {
+					Type:        framework.TypeString,
+					Description: "The name of the configuration under which the token is stored.",
+				},
 				"token_id": {
 					Type:        framework.TypeString,
 					Description: "The ID of the token to update.",
@@ -225,20 +265,25 @@ func pathUpdateToken(b *DatabricksBackend) []*framework.Path {
 			},
 		},
 	}
-	return paths
 }
 
 func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	configName, ok := d.GetOk("config_name")
+	if !ok {
+		return nil, fmt.Errorf("config_name not provided")
+	}
+
 	tokenID, ok := d.GetOk("token_id")
 	if !ok {
 		return nil, fmt.Errorf("token_id not provided")
 	}
+
 	newComment, ok := d.GetOk("comment")
 	if !ok {
 		return nil, fmt.Errorf("comment not provided")
 	}
 
-	entry, err := req.Storage.Get(ctx, fmt.Sprintf("tokens/%s", tokenID.(string)))
+	entry, err := req.Storage.Get(ctx, fmt.Sprintf("tokens/%s/%s", configName.(string), tokenID.(string)))
 	if err != nil || entry == nil {
 		return nil, fmt.Errorf("failed to find token: %v", err)
 	}
