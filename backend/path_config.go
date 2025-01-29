@@ -44,7 +44,7 @@ func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 }
 
 func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	config, err := getConfig(ctx, req.Storage)
+	config, err := getConfig(ctx, req.Storage, data)
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +59,8 @@ func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Req
 
 func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	warnings := []string{}
-
-	config, err := getConfig(ctx, req.Storage)
+	name := data.Get("name").(string)
+	config, err := getConfig(ctx, req.Storage, data)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 	// 	config.MaxTTL = time.Duration(configSchema["max_ttl"].Default.(int)) * time.Second
 	// }
 
-	entry, err := logical.StorageEntryJSON(pathPatternConfig, config)
+	entry, err := logical.StorageEntryJSON("config/"+name, config)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 func pathConfig(b *DatabricksBackend) []*framework.Path {
 	paths := []*framework.Path{
 		{
-			Pattern: pathPatternConfig,
+			Pattern: "config/(?P<name>.+)",
 			Fields:  configSchema,
 
 			Operations: map[logical.Operation]framework.OperationHandler{

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"github.com/hashicorp/vault/sdk/framework"
 	"time"
 
 	"github.com/hashicorp/vault/sdk/logical"
@@ -14,9 +15,10 @@ type ConfigStorageEntry struct {
 	MaxTTL  time.Duration `json:"max_ttl" structs:"max_ttl" mapstructure:"max_ttl"`
 }
 
-func getConfig(ctx context.Context, s logical.Storage) (*ConfigStorageEntry, error) {
+func getConfig(ctx context.Context, s logical.Storage, data *framework.FieldData) (*ConfigStorageEntry, error) {
+	name := data.Get("name").(string)
 	var config ConfigStorageEntry
-	configRaw, err := s.Get(ctx, pathPatternConfig)
+	configRaw, err := s.Get(ctx, "config/"+name)
 	if err != nil {
 		return nil, err
 	}

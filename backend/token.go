@@ -42,7 +42,7 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 }
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	config, err := getConfig(ctx, req.Storage)
+	config, err := getConfig(ctx, req.Storage, d)
 	if err != nil {
 		return nil, err
 	}
