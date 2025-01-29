@@ -43,65 +43,163 @@ func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 	}
 }
 
-func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	config, err := getConfig(ctx, req.Storage)
-	if err != nil {
-		return nil, err
+func (b *DatabricksBackend) pathConfigList() []*framework.Path {
+	return []*framework.Path{
+		{
+			Pattern: "config/?",
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ListOperation: &framework.PathOperation{
+					Callback: b.handleConfigList,
+				},
+			},
+		},
 	}
-	if config == nil {
-		return nil, nil
+}
+
+func (b *DatabricksBackend) handleConfigList(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	keys, err := req.Storage.List(ctx, "config/")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list configurations: %v", err)
 	}
 
 	return &logical.Response{
-		Data: configDetail(config),
+		Data: map[string]interface{}{
+			"keys": keys,
+		},
 	}, nil
 }
 
-func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	warnings := []string{}
+//func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+//	config, err := getConfig(ctx, req.Storage)
+//	if err != nil {
+//		return nil, err
+//	}
+//	if config == nil {
+//		return nil, nil
+//	}
+//
+//	return &logical.Response{
+//		Data: configDetail(config),
+//	}, nil
+//}
+//
+//func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+//	warnings := []string{}
+//
+//	config, err := getConfig(ctx, req.Storage)
+//	if err != nil {
+//		return nil, err
+//	}
+//	if config == nil {
+//		config = &ConfigStorageEntry{}
+//	}
+//
+//	baseURL, ok := data.GetOk("base_url")
+//	if ok {
+//		config.BaseURL = baseURL.(string)
+//	} else if config.BaseURL == "" {
+//		config.BaseURL = configSchema["base_url"].Default.(string)
+//	}
+//
+//	if token, ok := data.GetOk("token"); ok {
+//		config.Token = token.(string)
+//	}
+//
+//	maxTTLRaw, ok := data.GetOk("max_ttl")
+//	if ok && maxTTLRaw.(int) > 0 {
+//		// Until Gitlab implements granular token expiry.
+//		// bounce anything less than 24 hours
+//		if maxTTLRaw.(int) < (24 * 3600) {
+//			warnings = append(warnings, LT24HourTTLWarning("max_ttl"))
+//		} else {
+//			config.MaxTTL = time.Duration(maxTTLRaw.(int)) * time.Second
+//		}
+//	}
+//
+//	if config.MaxTTL == 0 {
+//		warnings = append(warnings, NoTTLWarning("max_ttl"))
+//	}
+//
+//	// maxTTLRaw, ok := data.GetOk("max_ttl")
+//	// if ok && maxTTLRaw.(int) > 0 {
+//	// 	config.MaxTTL = time.Duration(maxTTLRaw.(int)) * time.Second
+//	// } else if config.MaxTTL == time.Duration(0) {
+//	// 	config.MaxTTL = time.Duration(configSchema["max_ttl"].Default.(int)) * time.Second
+//	// }
+//
+//	entry, err := logical.StorageEntryJSON(pathPatternConfig, config)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	if err := req.Storage.Put(ctx, entry); err != nil {
+//		return nil, err
+//	}
+//
+//	return &logical.Response{
+//		Data:     configDetail(config),
+//		Warnings: warnings,
+//	}, nil
+//}
 
-	config, err := getConfig(ctx, req.Storage)
-	if err != nil {
-		return nil, err
+//func pathConfig(b *DatabricksBackend) []*framework.Path {
+//	paths := []*framework.Path{
+//		{
+//			Pattern: pathPatternConfig,
+//			Fields:  configSchema,
+//
+//			Operations: map[logical.Operation]framework.OperationHandler{
+//				logical.ReadOperation: &framework.PathOperation{
+//					Callback: b.pathConfigRead,
+//				},
+//				logical.UpdateOperation: &framework.PathOperation{
+//					Callback: b.pathConfigWrite,
+//					Examples: configExamples,
+//				},
+//			},
+//
+//			HelpSynopsis:    pathConfigHelpSyn,
+//			HelpDescription: pathConfigHelpDesc,
+//		},
+//	}
+//
+//	return paths
+//}
+
+func pathConfig(b *DatabricksBackend) []*framework.Path {
+	paths := []*framework.Path{
+		{
+			Pattern: "config/(?P<name>.+)",
+			Fields:  configSchema,
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.CreateOperation: &framework.PathOperation{
+					Callback: b.handleConfigWrite,
+				},
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.handleConfigWrite,
+					Examples: configExamples,
+				},
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: b.handleConfigRead,
+				},
+			},
+			HelpSynopsis:    pathConfigHelpSyn,
+			HelpDescription: pathConfigHelpDesc,
+		},
 	}
-	if config == nil {
-		config = &ConfigStorageEntry{}
+	return paths
+}
+
+func (b *DatabricksBackend) handleConfigWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	name := d.Get("name").(string)
+
+	config := &ConfigStorageEntry{
+		BaseURL: d.Get("base_url").(string),
+		Token:   d.Get("token").(string),
+		MaxTTL:  time.Duration(d.Get("max_ttl").(int)) * time.Second,
 	}
 
-	baseURL, ok := data.GetOk("base_url")
-	if ok {
-		config.BaseURL = baseURL.(string)
-	} else if config.BaseURL == "" {
-		config.BaseURL = configSchema["base_url"].Default.(string)
-	}
-
-	if token, ok := data.GetOk("token"); ok {
-		config.Token = token.(string)
-	}
-
-	maxTTLRaw, ok := data.GetOk("max_ttl")
-	if ok && maxTTLRaw.(int) > 0 {
-		// Until Gitlab implements granular token expiry.
-		// bounce anything less than 24 hours
-		if maxTTLRaw.(int) < (24 * 3600) {
-			warnings = append(warnings, LT24HourTTLWarning("max_ttl"))
-		} else {
-			config.MaxTTL = time.Duration(maxTTLRaw.(int)) * time.Second
-		}
-	}
-
-	if config.MaxTTL == 0 {
-		warnings = append(warnings, NoTTLWarning("max_ttl"))
-	}
-
-	// maxTTLRaw, ok := data.GetOk("max_ttl")
-	// if ok && maxTTLRaw.(int) > 0 {
-	// 	config.MaxTTL = time.Duration(maxTTLRaw.(int)) * time.Second
-	// } else if config.MaxTTL == time.Duration(0) {
-	// 	config.MaxTTL = time.Duration(configSchema["max_ttl"].Default.(int)) * time.Second
-	// }
-
-	entry, err := logical.StorageEntryJSON(pathPatternConfig, config)
+	entry, err := logical.StorageEntryJSON("config/"+name, config)
 	if err != nil {
 		return nil, err
 	}
@@ -110,34 +208,29 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 		return nil, err
 	}
 
-	return &logical.Response{
-		Data:     configDetail(config),
-		Warnings: warnings,
-	}, nil
+	return &logical.Response{}, nil
 }
 
-func pathConfig(b *DatabricksBackend) []*framework.Path {
-	paths := []*framework.Path{
-		{
-			Pattern: pathPatternConfig,
-			Fields:  configSchema,
+func (b *DatabricksBackend) handleConfigRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	name := d.Get("name").(string)
 
-			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.pathConfigRead,
-				},
-				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathConfigWrite,
-					Examples: configExamples,
-				},
-			},
-
-			HelpSynopsis:    pathConfigHelpSyn,
-			HelpDescription: pathConfigHelpDesc,
-		},
+	entry, err := req.Storage.Get(ctx, "config/"+name)
+	if err != nil || entry == nil {
+		return nil, fmt.Errorf("failed to retrieve configuration")
 	}
 
-	return paths
+	var config ConfigStorageEntry
+	if err := entry.DecodeJSON(&config); err != nil {
+		return nil, err
+	}
+
+	return &logical.Response{
+		Data: map[string]interface{}{
+			"base_url": config.BaseURL,
+			"token":    config.Token,
+			"max_ttl":  config.MaxTTL.Seconds(),
+		},
+	}, nil
 }
 
 const pathConfigHelpSyn = `
