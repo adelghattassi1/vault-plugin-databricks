@@ -12,7 +12,7 @@ import (
 )
 
 func pathCreateToken(b *DatabricksBackend) []*framework.Path {
-	return []*framework.Path{
+	paths := []*framework.Path{
 		{
 			Pattern: "tokens",
 			Fields: map[string]*framework.FieldSchema{
@@ -43,6 +43,7 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 			},
 		},
 	}
+	return paths
 }
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
@@ -224,6 +225,7 @@ func (b *DatabricksBackend) handleTokenList(ctx context.Context, req *logical.Re
 	}, nil
 }
 
+//
 //func pathListTokens(b *DatabricksBackend) []*framework.Path {
 //	paths := []*framework.Path{
 //		{
