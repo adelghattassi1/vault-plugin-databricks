@@ -50,7 +50,7 @@ func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 			pathConfig(backend),
 			pathCreateToken(backend),
 			pathReadToken(backend),
-			pathTokenList(backend),
+			pathListTokens(backend),
 			pathUpdateToken(backend),
 		),
 	}
