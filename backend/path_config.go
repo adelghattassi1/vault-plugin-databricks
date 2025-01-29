@@ -38,7 +38,7 @@ var configSchema = map[string]*framework.FieldSchema{
 
 func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 	return map[string]interface{}{
-		"base_url": config,
+		"base_url": config.BaseURL,
 		"max_ttl":  int64(config.MaxTTL / time.Second),
 	}
 }
