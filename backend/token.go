@@ -222,22 +222,14 @@ func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.R
 		return nil, fmt.Errorf("config_name not provided")
 	}
 
-	keys, err := req.Storage.List(ctx, fmt.Sprintf("tokens/%s", configName.(string)))
+	tokens, err := req.Storage.List(ctx, fmt.Sprintf("tokens/%s", configName.(string)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens for config: %s", configName.(string))
 	}
-	if keys == nil {
+	if tokens == nil {
 		b.Logger().Warn("No tokens found; keys is nil", "config_name", configName.(string))
 	}
-
-	// Log the keys found for debug purposes
-	b.Logger().Info("Keys found", "keys", keys)
-
-	return &logical.Response{
-		Data: map[string]interface{}{
-			"keys": keys,
-		},
-	}, nil
+	return logical.ListResponse(tokens), nil
 }
 
 func pathUpdateToken(b *DatabricksBackend) []*framework.Path {
