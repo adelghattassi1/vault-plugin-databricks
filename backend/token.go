@@ -206,7 +206,7 @@ func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Re
 func pathListTokens(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: fmt.Sprintf("tokens/%s?", framework.GenericNameRegex("config_name")),
+			Pattern: fmt.Sprintf("tokens/%s?/?", framework.GenericNameRegex("config_name")),
 			Fields: map[string]*framework.FieldSchema{
 				"config_name": {
 					Type:        framework.TypeString,
