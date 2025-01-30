@@ -206,7 +206,7 @@ func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Re
 func pathListTokens(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: fmt.Sprintf("tokens/%s", framework.GenericNameRegex("config_name")),
+			Pattern: fmt.Sprintf("tokens/%s?", framework.GenericNameRegex("config_name")),
 			Fields: map[string]*framework.FieldSchema{
 				"config_name": {
 					Type:        framework.TypeString,
@@ -222,13 +222,21 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 	}
 }
 
+func listTokensEntries(ctx context.Context, storage logical.Storage) ([]string, error) {
+	tokens, err := storage.List(ctx, fmt.Sprintf("%s/%s", pathPatternToken, framework.GenericNameRegex("config_name")))
+	if err != nil {
+		return nil, err
+	}
+	return tokens, nil
+}
+
 func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	configName, ok := d.GetOk("config_name")
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
 	}
 
-	tokens, err := req.Storage.List(ctx, fmt.Sprintf("tokens/%s", configName.(string)))
+	tokens, err := listTokensEntries(ctx, req.Storage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens for config: %s", configName.(string))
 	}
