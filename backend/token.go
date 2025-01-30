@@ -236,6 +236,9 @@ func listTokensEntries(ctx context.Context, storage logical.Storage, d *framewor
 
 func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	tokens, err := listTokensEntries(ctx, req.Storage, d)
+
+	// Log the keys found for debugging
+	b.Logger().Info("Keys found", "keys", tokens)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens: %s", tokens)
 	}
