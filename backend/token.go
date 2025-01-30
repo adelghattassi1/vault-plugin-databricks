@@ -222,6 +222,10 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 	}
 }
 
+func NoTokensWarning(s string) string {
+	return fmt.Sprintf("%s is not set. Token can be generated with expiration 'never'", s)
+}
+
 func listTokensEntries(ctx context.Context, storage logical.Storage, d *framework.FieldData) ([]string, error) {
 	configName, ok := d.GetOk("config_name")
 	if !ok {
@@ -235,14 +239,25 @@ func listTokensEntries(ctx context.Context, storage logical.Storage, d *framewor
 }
 
 func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	warnings := []string{}
 	tokens, err := listTokensEntries(ctx, req.Storage, d)
 
 	// Log the keys found for debugging
+	if tokens == nil {
+		warnings = append(warnings, NoTokensWarning("tokens are not set"))
+	}
 	b.Logger().Info("Keys found", "keys", tokens)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens: %s", tokens)
 	}
-	return logical.ListResponse(tokens), nil
+	resp := &logical.Response{
+		Data:     map[string]interface{}{},
+		Warnings: warnings,
+	}
+	if len(tokens) != 0 {
+		resp.Data["keys"] = tokens
+	}
+	return resp, nil
 }
 
 func pathUpdateToken(b *DatabricksBackend) []*framework.Path {
