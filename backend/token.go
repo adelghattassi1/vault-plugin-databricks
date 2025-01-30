@@ -207,12 +207,6 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "tokens/(?P<config_name>[^/]+)",
-			Fields: map[string]*framework.FieldSchema{
-				"config_name": {
-					Type:        framework.TypeString,
-					Description: "The name of the configuration to list tokens for.",
-				},
-			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
 					Callback: b.handleListTokens,
