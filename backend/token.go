@@ -222,8 +222,12 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 	}
 }
 
-func listTokensEntries(ctx context.Context, storage logical.Storage) ([]string, error) {
-	tokens, err := storage.List(ctx, fmt.Sprintf("%s/%s", pathPatternToken, framework.GenericNameRegex("config_name")))
+func listTokensEntries(ctx context.Context, storage logical.Storage, d *framework.FieldData) ([]string, error) {
+	configName, ok := d.GetOk("config_name")
+	if !ok {
+		return nil, fmt.Errorf("config_name not provided")
+	}
+	tokens, err := storage.List(ctx, fmt.Sprintf("%s/%s", pathPatternToken, configName))
 	if err != nil {
 		return nil, err
 	}
@@ -231,17 +235,9 @@ func listTokensEntries(ctx context.Context, storage logical.Storage) ([]string, 
 }
 
 func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	configName, ok := d.GetOk("config_name")
-	if !ok {
-		return nil, fmt.Errorf("config_name not provided")
-	}
-
-	tokens, err := listTokensEntries(ctx, req.Storage)
+	tokens, err := listTokensEntries(ctx, req.Storage, d)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list tokens for config: %s", configName.(string))
-	}
-	if tokens == nil {
-		b.Logger().Warn("No tokens found; keys is nil", "config_name", configName.(string))
+		return nil, fmt.Errorf("failed to list tokens: %s", tokens)
 	}
 	return logical.ListResponse(tokens), nil
 }
