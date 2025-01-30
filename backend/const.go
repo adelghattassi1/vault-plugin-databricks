@@ -2,7 +2,7 @@ package backend
 
 const (
 	pathPatternConfig = "config"
-	pathPatternToken  = "token"
+	pathPatternToken  = "tokens"
 	pathPatternRoles  = "roles"
 
 	// accessLevelGuest      = 10
