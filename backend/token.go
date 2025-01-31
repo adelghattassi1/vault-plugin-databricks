@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 	"io"
 	"net/http"
+	"strings"
 )
 
 func pathCreateToken(b *DatabricksBackend) []*framework.Path {
@@ -246,7 +247,7 @@ func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.R
 
 	// Log the keys found for debugging
 	if tokens != nil {
-		warnings = append(warnings, NoTokensWarning("tokens are set"))
+		warnings = append(warnings, NoTokensWarning(strings.Join(tokens, ",")))
 	}
 	b.Logger().Info("Keys found", "keys", tokens)
 	if err != nil {
