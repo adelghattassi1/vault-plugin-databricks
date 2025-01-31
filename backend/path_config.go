@@ -48,6 +48,39 @@ func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 	}
 }
 
+func pathDeleteConfig(b *DatabricksBackend) []*framework.Path {
+	return []*framework.Path{
+		{
+			Pattern: "config/(?P<name>.+)",
+			Fields: map[string]*framework.FieldSchema{
+				"name": {
+					Type:        framework.TypeString,
+					Description: "The name of the configuration to delete.",
+				},
+			},
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.DeleteOperation: &framework.PathOperation{
+					Callback: b.handleDeleteConfig,
+				},
+			},
+		},
+	}
+}
+
+func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	name, ok := d.GetOk("name")
+	if !ok {
+		return nil, fmt.Errorf("name not provided")
+	}
+
+	key := fmt.Sprintf("config/%s", name.(string))
+	if err := req.Storage.Delete(ctx, key); err != nil {
+		return nil, fmt.Errorf("failed to delete configuration: %v", err)
+	}
+
+	return &logical.Response{}, nil
+}
+
 func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	config, err := getConfig(ctx, req.Storage, data)
 	if err != nil {

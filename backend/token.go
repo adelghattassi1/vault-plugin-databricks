@@ -9,7 +9,6 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 	"io"
 	"net/http"
-	"strings"
 )
 
 func pathCreateToken(b *DatabricksBackend) []*framework.Path {
@@ -44,12 +43,6 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 			},
 		},
 	}
-}
-
-type TokenInfo struct {
-	TokenID    string `json:"token_id"`
-	TokenValue string `json:"token_value"`
-	Comment    string `json:"comment"`
 }
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
@@ -149,19 +142,13 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		Key:   key,
 		Value: bodyBytes,
 	}
-	formattedTokenInfo := TokenInfo{
-		TokenID:    tokenInfo["token_id"].(string),
-		TokenValue: tokenInfo["token_value"].(string),
-		Comment:    tokenInfo["comment"].(string),
-	}
+
 	if err := req.Storage.Put(ctx, tokenEntry); err != nil {
 		return nil, fmt.Errorf("failed to store token in Vault: %v", err)
 	}
 
 	return &logical.Response{
-		Data: map[string]interface{}{
-			"token_info": formattedTokenInfo,
-		},
+		Data:     responseMap,
 		Warnings: warnings,
 	}, nil
 }
@@ -212,15 +199,9 @@ func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Re
 	if err := json.Unmarshal(entry.Value, &tokenData); err != nil {
 		return nil, fmt.Errorf("failed to parse stored token data: %v", err)
 	}
-	formattedTokenInfo := TokenInfo{
-		TokenID:    tokenData["token_id"].(string),
-		TokenValue: tokenData["token_value"].(string),
-		Comment:    tokenData["comment"].(string),
-	}
+
 	return &logical.Response{
-		Data: map[string]interface{}{
-			"token_info": formattedTokenInfo,
-		},
+		Data: tokenData,
 	}, nil
 }
 
@@ -242,11 +223,47 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 		},
 	}
 }
-
-func NoTokensWarning(s string) string {
-	return fmt.Sprintf("%s is not set. Token can be generated with expiration 'never'", s)
+func pathDeleteToken(b *DatabricksBackend) []*framework.Path {
+	return []*framework.Path{
+		{
+			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_id>[^/]+)",
+			Fields: map[string]*framework.FieldSchema{
+				"config_name": {
+					Type:        framework.TypeString,
+					Description: "The name of the configuration under which the token is stored.",
+				},
+				"token_id": {
+					Type:        framework.TypeString,
+					Description: "The ID of the token to delete.",
+				},
+			},
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.DeleteOperation: &framework.PathOperation{
+					Callback: b.handleDeleteToken,
+				},
+			},
+		},
+	}
 }
 
+func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	configName, ok := d.GetOk("config_name")
+	if !ok {
+		return nil, fmt.Errorf("config_name not provided")
+	}
+
+	tokenID, ok := d.GetOk("token_id")
+	if !ok {
+		return nil, fmt.Errorf("token_id not provided")
+	}
+
+	key := fmt.Sprintf("tokens/%s/%s", configName.(string), tokenID.(string))
+	if err := req.Storage.Delete(ctx, key); err != nil {
+		return nil, fmt.Errorf("failed to delete token: %v", err)
+	}
+
+	return &logical.Response{}, nil
+}
 func listTokensEntries(ctx context.Context, storage logical.Storage, d *framework.FieldData) ([]string, error) {
 	configName, ok := d.GetOk("config_name")
 	if !ok {
@@ -262,11 +279,6 @@ func listTokensEntries(ctx context.Context, storage logical.Storage, d *framewor
 func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	warnings := []string{}
 	tokens, err := listTokensEntries(ctx, req.Storage, d)
-
-	// Log the keys found for debugging
-	if tokens != nil {
-		warnings = append(warnings, NoTokensWarning(strings.Join(tokens, ",")))
-	}
 	b.Logger().Info("Keys found", "keys", tokens)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens: %s", tokens)
