@@ -97,7 +97,17 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	if !ok {
 		return nil, fmt.Errorf("application_id not provided")
 	}
-	lifetimeSeconds, ok := d.GetOk("lifetime_seconds")
+	lifetimeStr, ok := d.GetOk("lifetime_seconds")
+	if !ok {
+		return nil, fmt.Errorf("lifetime_seconds not provided")
+	}
+
+	// Parse the duration string into a time.Duration
+	lifetimeDuration, err := time.ParseDuration(lifetimeStr.(string))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse lifetime_seconds: %v", err)
+	}
+
 	if !ok {
 		return nil, fmt.Errorf("lifetime_seconds not provided")
 	}
@@ -105,7 +115,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 
 	requestPayload := map[string]interface{}{
 		"application_id":   applicationID.(string),
-		"lifetime_seconds": lifetimeSeconds.(int),
+		"lifetime_seconds": int64(lifetimeDuration.Seconds()),
 		"comment":          comment,
 	}
 
@@ -165,7 +175,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		TokenID:       tokenID,
 		TokenValue:    tokenValue,
 		ApplicationID: applicationID.(string),
-		Lifetime:      time.Duration(lifetimeSeconds.(int)) * time.Second,
+		Lifetime:      lifetimeDuration,
 		Comment:       comment.(string),
 		CreationTime:  time.Now(),
 		Configuration: configNameStr,
