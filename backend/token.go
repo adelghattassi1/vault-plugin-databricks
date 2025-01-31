@@ -50,13 +50,13 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 }
 func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 	return map[string]interface{}{
-		"token_id":       token.TokenID,
-		"token_value":    token.TokenValue,
-		"application_id": token.ApplicationID,
-		"lifetime":       int64(token.Lifetime / time.Second),
-		"comment":        token.Comment,
-		"creation_time":  token.CreationTime.Format(time.RFC3339),
-		"configuration":  token.Configuration,
+		"token_id":         token.TokenID,
+		"token_value":      token.TokenValue,
+		"application_id":   token.ApplicationID,
+		"lifetime_seconds": int64(token.Lifetime / time.Second),
+		"comment":          token.Comment,
+		"creation_time":    token.CreationTime.Format(time.RFC3339),
+		"configuration":    token.Configuration,
 	}
 }
 
@@ -64,7 +64,7 @@ type TokenStorageEntry struct {
 	TokenID       string        `json:"token_id" structs:"token_id" mapstructure:"token_id"`
 	TokenValue    string        `json:"token_value" structs:"token_value" mapstructure:"token_value"`
 	ApplicationID string        `json:"application_id" structs:"application_id" mapstructure:"application_id"`
-	Lifetime      time.Duration `json:"lifetime" structs:"lifetime" mapstructure:"lifetime"`
+	Lifetime      time.Duration `json:"lifetime_seconds" structs:"lifetime_seconds" mapstructure:"lifetime_seconds"`
 	Comment       string        `json:"comment" structs:"comment" mapstructure:"comment"`
 	CreationTime  time.Time     `json:"creation_time" structs:"creation_time" mapstructure:"creation_time"`
 	Configuration string        `json:"configuration" structs:"configuration" mapstructure:"configuration"`
