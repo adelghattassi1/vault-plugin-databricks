@@ -46,6 +46,12 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 	}
 }
 
+type TokenInfo struct {
+	TokenID    string `json:"token_id"`
+	TokenValue string `json:"token_value"`
+	Comment    string `json:"comment"`
+}
+
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	warnings := []string{}
 	configName, ok := d.GetOk("config_name")
@@ -143,13 +149,19 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		Key:   key,
 		Value: bodyBytes,
 	}
-
+	formattedTokenInfo := TokenInfo{
+		TokenID:    tokenInfo["token_id"].(string),
+		TokenValue: tokenInfo["token_value"].(string),
+		Comment:    tokenInfo["comment"].(string),
+	}
 	if err := req.Storage.Put(ctx, tokenEntry); err != nil {
 		return nil, fmt.Errorf("failed to store token in Vault: %v", err)
 	}
 
 	return &logical.Response{
-		Data:     responseMap,
+		Data: map[string]interface{}{
+			"token_info": formattedTokenInfo,
+		},
 		Warnings: warnings,
 	}, nil
 }
@@ -200,9 +212,15 @@ func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Re
 	if err := json.Unmarshal(entry.Value, &tokenData); err != nil {
 		return nil, fmt.Errorf("failed to parse stored token data: %v", err)
 	}
-
+	formattedTokenInfo := TokenInfo{
+		TokenID:    tokenData["token_id"].(string),
+		TokenValue: tokenData["token_value"].(string),
+		Comment:    tokenData["comment"].(string),
+	}
 	return &logical.Response{
-		Data: tokenData,
+		Data: map[string]interface{}{
+			"token_info": formattedTokenInfo,
+		},
 	}, nil
 }
 
