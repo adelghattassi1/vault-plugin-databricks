@@ -46,6 +46,7 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 }
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	warnings := []string{}
 	configName, ok := d.GetOk("config_name")
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
@@ -136,7 +137,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 
 	key := fmt.Sprintf("tokens/%s/%s", configNameStr, tokenID)
-
+	warnings = append(warnings, key)
 	tokenEntry := &logical.StorageEntry{
 		Key:   key,
 		Value: bodyBytes,
@@ -147,7 +148,8 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 
 	return &logical.Response{
-		Data: responseMap,
+		Data:     responseMap,
+		Warnings: warnings,
 	}, nil
 }
 
@@ -243,8 +245,8 @@ func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.R
 	tokens, err := listTokensEntries(ctx, req.Storage, d)
 
 	// Log the keys found for debugging
-	if tokens == nil {
-		warnings = append(warnings, NoTokensWarning("tokens are not set"))
+	if tokens != nil {
+		warnings = append(warnings, NoTokensWarning("tokens are set"))
 	}
 	b.Logger().Info("Keys found", "keys", tokens)
 	if err != nil {
