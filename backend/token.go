@@ -262,7 +262,7 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to delete token: %v", err)
 	}
 
-	return &logical.Response{}, nil
+	return nil, nil
 }
 func listTokensEntries(ctx context.Context, storage logical.Storage, d *framework.FieldData) ([]string, error) {
 	configName, ok := d.GetOk("config_name")

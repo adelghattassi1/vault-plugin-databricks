@@ -78,7 +78,7 @@ func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical
 		return nil, fmt.Errorf("failed to delete configuration: %v", err)
 	}
 
-	return &logical.Response{}, nil
+	return nil, nil
 }
 
 func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
