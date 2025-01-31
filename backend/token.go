@@ -234,7 +234,7 @@ func listTokensEntries(ctx context.Context, storage logical.Storage, d *framewor
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
 	}
-	tokens, err := storage.List(ctx, fmt.Sprintf("%s/%s", pathPatternToken, configName))
+	tokens, err := storage.List(ctx, fmt.Sprintf("%s/%s/", pathPatternToken, configName))
 	if err != nil {
 		return nil, err
 	}
