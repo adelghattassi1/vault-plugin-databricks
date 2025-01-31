@@ -9,7 +9,19 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 	"io"
 	"net/http"
+	"time"
 )
+
+func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
+	return map[string]interface{}{
+		"token_id":       token.TokenID,
+		"token_value":    token.TokenValue,
+		"application_id": token.ApplicationID,
+		"lifetime":       int64(token.Lifetime / time.Second),
+		"comment":        token.Comment,
+		"creation_time":  token.CreationTime.Format(time.RFC3339),
+	}
+}
 
 func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
@@ -177,31 +189,15 @@ func pathReadToken(b *DatabricksBackend) []*framework.Path {
 }
 
 func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	configName, ok := d.GetOk("config_name")
-	if !ok {
-		return nil, fmt.Errorf("config_name not provided")
-	}
-
-	tokenID, ok := d.GetOk("token_id")
-	if !ok {
-		return nil, fmt.Errorf("token_id not provided")
-	}
-
-	entry, err := req.Storage.Get(ctx, fmt.Sprintf("tokens/%s/%s", configName.(string), tokenID.(string)))
+	entry, err := getToken(ctx, req.Storage, d)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read token: %v", err)
+		return nil, err
 	}
 	if entry == nil {
-		return nil, fmt.Errorf("token not found for config: %s", configName.(string))
+		return nil, nil
 	}
-
-	var tokenData map[string]interface{}
-	if err := json.Unmarshal(entry.Value, &tokenData); err != nil {
-		return nil, fmt.Errorf("failed to parse stored token data: %v", err)
-	}
-
 	return &logical.Response{
-		Data: tokenData,
+		Data: tokenDetail(entry),
 	}, nil
 }
 
@@ -223,6 +219,35 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 		},
 	}
 }
+
+type TokenStorageEntry struct {
+	TokenID       string        `json:"token_id" structs:"token_id" mapstructure:"token_id"`
+	TokenValue    string        `json:"token_value" structs:"token_value" mapstructure:"token_value"`
+	ApplicationID string        `json:"application_id" structs:"application_id" mapstructure:"application_id"`
+	Lifetime      time.Duration `json:"lifetime" structs:"lifetime" mapstructure:"lifetime"`
+	Comment       string        `json:"comment" structs:"comment" mapstructure:"comment"`
+	CreationTime  time.Time     `json:"creation_time" structs:"creation_time" mapstructure:"creation_time"`
+}
+
+func getToken(ctx context.Context, s logical.Storage, data *framework.FieldData) (*TokenStorageEntry, error) {
+	name := data.Get("config_name").(string)
+	tokenId := data.Get("token_id").(string)
+	var token TokenStorageEntry
+	tokenRaw, err := s.Get(ctx, "tokens/"+name+"/"+tokenId)
+	if err != nil {
+		return nil, err
+	}
+	if tokenRaw == nil {
+		return nil, nil
+	}
+
+	if err := tokenRaw.DecodeJSON(&token); err != nil {
+		return nil, err
+	}
+
+	return &token, err
+}
+
 func pathDeleteToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
@@ -257,7 +282,7 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("token_id not provided")
 	}
 
-	key := fmt.Sprintf("tokens/%s/%s", configName.(string), tokenID.(string))
+	key := fmt.Sprintf("tokens/%s/%s/", configName.(string), tokenID.(string))
 	if err := req.Storage.Delete(ctx, key); err != nil {
 		return nil, fmt.Errorf("failed to delete token: %v", err)
 	}

@@ -48,25 +48,6 @@ func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 	}
 }
 
-func pathDeleteConfig(b *DatabricksBackend) []*framework.Path {
-	return []*framework.Path{
-		{
-			Pattern: "config/(?P<name>.+)",
-			Fields: map[string]*framework.FieldSchema{
-				"name": {
-					Type:        framework.TypeString,
-					Description: "The name of the configuration to delete.",
-				},
-			},
-			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.DeleteOperation: &framework.PathOperation{
-					Callback: b.handleDeleteConfig,
-				},
-			},
-		},
-	}
-}
-
 func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	name, ok := d.GetOk("name")
 	if !ok {
@@ -171,6 +152,9 @@ func pathConfig(b *DatabricksBackend) []*framework.Path {
 				logical.UpdateOperation: &framework.PathOperation{
 					Callback: b.pathConfigWrite,
 					Examples: configExamples,
+				},
+				logical.DeleteOperation: &framework.PathOperation{
+					Callback: b.handleDeleteConfig,
 				},
 			},
 
