@@ -53,7 +53,7 @@ func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 		"token_id":         token.TokenID,
 		"token_value":      token.TokenValue,
 		"application_id":   token.ApplicationID,
-		"lifetime_seconds": int64(token.Lifetime / time.Second),
+		"lifetime_seconds": token.Lifetime,
 		"comment":          token.Comment,
 		"creation_time":    token.CreationTime.Format(time.RFC3339),
 		"configuration":    token.Configuration,
@@ -105,7 +105,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 
 	requestPayload := map[string]interface{}{
 		"application_id":   applicationID.(string),
-		"lifetime_seconds": lifetimeSeconds.(int),
+		"lifetime_seconds": lifetimeSeconds,
 		"comment":          comment,
 	}
 
