@@ -3,12 +3,16 @@ package backend
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 	"io"
 	"net/http"
+	"time"
 )
 
 func pathCreateToken(b *DatabricksBackend) []*framework.Path {
@@ -44,9 +48,29 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 		},
 	}
 }
+func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
+	return map[string]interface{}{
+		"token_id":       token.TokenID,
+		"token_value":    token.TokenValue,
+		"application_id": token.ApplicationID,
+		"lifetime":       int64(token.Lifetime / time.Second),
+		"comment":        token.Comment,
+		"creation_time":  token.CreationTime.Format(time.RFC3339),
+		"configuration":  token.Configuration,
+	}
+}
+
+type TokenStorageEntry struct {
+	TokenID       string        `json:"token_id" structs:"token_id" mapstructure:"token_id"`
+	TokenValue    string        `json:"token_value" structs:"token_value" mapstructure:"token_value"`
+	ApplicationID string        `json:"application_id" structs:"application_id" mapstructure:"application_id"`
+	Lifetime      time.Duration `json:"lifetime" structs:"lifetime" mapstructure:"lifetime"`
+	Comment       string        `json:"comment" structs:"comment" mapstructure:"comment"`
+	CreationTime  time.Time     `json:"creation_time" structs:"creation_time" mapstructure:"creation_time"`
+	Configuration string        `json:"configuration" structs:"configuration" mapstructure:"configuration"`
+}
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	warnings := []string{}
 	configName, ok := d.GetOk("config_name")
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
@@ -69,7 +93,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	databricksInstance := config.BaseURL
 	databricksToken := config.Token
 
-	// Retrieve token creation parameters
 	applicationID, ok := d.GetOk("application_id")
 	if !ok {
 		return nil, fmt.Errorf("application_id not provided")
@@ -80,7 +103,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 	comment, _ := d.GetOk("comment") // Comment is optional
 
-	// Prepare the request payload
 	requestPayload := map[string]interface{}{
 		"application_id":   applicationID.(string),
 		"lifetime_seconds": lifetimeSeconds.(int),
@@ -94,7 +116,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 
 	apiURL := fmt.Sprintf("%s/api/2.0/token-management/on-behalf-of/tokens", databricksInstance)
 
-	// Create and configure the HTTP request
 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
@@ -112,7 +133,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 	defer resp.Body.Close()
 
-	// Read and process the response
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %v", err)
@@ -133,26 +153,48 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 
 	tokenID, ok := tokenInfo["token_id"].(string)
 	if !ok {
-		return nil, fmt.Errorf("token_info field missing token_id")
+		tokenID = generateTokenID() // Fallback to a generated token ID if not provided
 	}
 
-	key := fmt.Sprintf("tokens/%s/%s", configNameStr, tokenID)
-	warnings = append(warnings, key)
-	tokenEntry := &logical.StorageEntry{
-		Key:   key,
-		Value: bodyBytes,
+	tokenValue, err := generateTokenValue()
+	if err != nil {
+		return nil, err
 	}
 
-	if err := req.Storage.Put(ctx, tokenEntry); err != nil {
+	tokenEntry := TokenStorageEntry{
+		TokenID:       tokenID,
+		TokenValue:    tokenValue,
+		ApplicationID: applicationID.(string),
+		Lifetime:      time.Duration(lifetimeSeconds.(int)) * time.Second,
+		Comment:       comment.(string),
+		CreationTime:  time.Now(),
+		Configuration: configNameStr,
+	}
+
+	storageEntry, err := logical.StorageEntryJSON(fmt.Sprintf("tokens/%s/%s", configNameStr, tokenEntry.TokenID), tokenEntry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage entry: %v", err)
+	}
+	if err := req.Storage.Put(ctx, storageEntry); err != nil {
 		return nil, fmt.Errorf("failed to store token in Vault: %v", err)
 	}
 
 	return &logical.Response{
-		Data:     responseMap,
-		Warnings: warnings,
+		Data: tokenDetail(&tokenEntry),
 	}, nil
 }
 
+func generateTokenID() string {
+	return uuid.New().String()
+}
+
+func generateTokenValue() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("failed to generate token value: %v", err)
+	}
+	return hex.EncodeToString(bytes), nil
+}
 func pathReadToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
