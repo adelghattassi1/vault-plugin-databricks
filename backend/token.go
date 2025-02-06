@@ -67,6 +67,23 @@ type TokenStorageEntry struct {
 	Configuration string        `json:"configuration" structs:"configuration" mapstructure:"configuration"`
 }
 
+type TokenResponse struct {
+	TokenValue string    `json:"token_value"`
+	TokenInfo  TokenInfo `json:"token_info"`
+}
+
+type TokenInfo struct {
+	TokenID           string `json:"token_id"`
+	CreationTime      int64  `json:"creation_time"`
+	ExpiryTime        int64  `json:"expiry_time"`
+	Comment           string `json:"comment"`
+	CreatedByID       int64  `json:"created_by_id"`
+	CreatedByUsername string `json:"created_by_username"`
+	OwnerID           int64  `json:"owner_id"`
+	WorkspaceID       int64  `json:"workspace_id"`
+	LastUsedDay       int64  `json:"last_used_day"`
+}
+
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	configName, ok := d.GetOk("config_name")
 	if !ok {
@@ -94,15 +111,21 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	if !ok {
 		return nil, fmt.Errorf("application_id not provided")
 	}
-	lifetimeSeconds, ok := d.GetOk("lifetime_seconds")
+	lifetimeStr, ok := d.GetOk("lifetime_seconds")
 	if !ok {
 		return nil, fmt.Errorf("lifetime_seconds not provided")
+	}
+
+	// Parse the duration string into a time.Duration
+	lifetimeDuration, err := time.ParseDuration(lifetimeStr.(string))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse lifetime_seconds: %v", err)
 	}
 	comment, _ := d.GetOk("comment") // Comment is optional
 
 	requestPayload := map[string]interface{}{
 		"application_id":   applicationID.(string),
-		"lifetime_seconds": lifetimeSeconds,
+		"lifetime_seconds": int64(lifetimeDuration.Seconds()),
 		"comment":          comment,
 	}
 
@@ -123,7 +146,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	httpReq.Header.Set("Authorization", "Bearer "+databricksToken)
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	client := b.getClient() // Assume b.getClient() returns an *http.Client
+	client := b.getClient()
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform HTTP request: %v", err)
@@ -134,34 +157,35 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
+
+	// Log the response for debugging
+	b.Logger().Info("Databricks API response", "response", string(bodyBytes))
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to create token, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	var responseMap map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &responseMap); err != nil {
+	var response TokenResponse
+	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse Databricks API response: %v", err)
 	}
 
-	tokenInfo, ok := responseMap["token_info"].(map[string]interface{})
-	tokenValue, ok := responseMap["token_value"].(string)
-	if !ok {
-		return nil, fmt.Errorf("databricks API response missing token_info field")
+	// Validate required fields
+	if response.TokenInfo.TokenID == "" || response.TokenValue == "" {
+		return nil, fmt.Errorf("databricks API response missing required fields")
 	}
 
-	tokenID, ok := tokenInfo["token_id"].(string)
-	CreationTime, ok := tokenInfo["creation_time"].(time.Time)
-	if err != nil {
-		return nil, err
-	}
+	// Log more details if needed for debugging
+	b.Logger().Info("Parsed token info", "token_id", response.TokenInfo.TokenID, "created_by", response.TokenInfo.CreatedByUsername)
 
+	// Process and store the token
 	tokenEntry := TokenStorageEntry{
-		TokenID:       tokenID,
-		TokenValue:    tokenValue,
+		TokenID:       response.TokenInfo.TokenID,
+		TokenValue:    response.TokenValue,
 		ApplicationID: applicationID.(string),
-		Lifetime:      time.Duration(lifetimeSeconds.(int)),
-		Comment:       comment.(string),
-		CreationTime:  CreationTime,
+		Lifetime:      lifetimeDuration,
+		Comment:       response.TokenInfo.Comment,
+		CreationTime:  time.Unix(0, response.TokenInfo.CreationTime*int64(time.Millisecond)), // Convert from milliseconds
 		Configuration: configNameStr,
 	}
 
