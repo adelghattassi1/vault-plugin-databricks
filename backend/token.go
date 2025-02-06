@@ -3,11 +3,8 @@ package backend
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 	"io"
@@ -147,16 +144,13 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 
 	tokenInfo, ok := responseMap["token_info"].(map[string]interface{})
+	tokenValue, ok := responseMap["token_value"].(string)
 	if !ok {
 		return nil, fmt.Errorf("databricks API response missing token_info field")
 	}
 
 	tokenID, ok := tokenInfo["token_id"].(string)
-	if !ok {
-		tokenID = generateTokenID() // Fallback to a generated token ID if not provided
-	}
-
-	tokenValue, err := generateTokenValue()
+	CreationTime, ok := tokenInfo["creation_time"].(time.Time)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +161,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		ApplicationID: applicationID.(string),
 		Lifetime:      time.Duration(lifetimeSeconds.(int)),
 		Comment:       comment.(string),
-		CreationTime:  time.Now(),
+		CreationTime:  CreationTime,
 		Configuration: configNameStr,
 	}
 
@@ -184,17 +178,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}, nil
 }
 
-func generateTokenID() string {
-	return uuid.New().String()
-}
-
-func generateTokenValue() (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate token value: %v", err)
-	}
-	return hex.EncodeToString(bytes), nil
-}
 func pathReadToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
