@@ -159,7 +159,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		TokenID:       tokenID,
 		TokenValue:    tokenValue,
 		ApplicationID: applicationID.(string),
-		Lifetime:      lifetimeSeconds.(time.Duration),
+		Lifetime:      time.Duration(lifetimeSeconds.(int)),
 		Comment:       comment.(string),
 		CreationTime:  CreationTime,
 		Configuration: configNameStr,
