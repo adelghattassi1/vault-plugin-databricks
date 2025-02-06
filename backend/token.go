@@ -28,7 +28,7 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 					Required:    true,
 				},
 				"lifetime_seconds": {
-					Type:        framework.TypeInt,
+					Type:        framework.TypeDurationSecond,
 					Description: "The number of seconds before the token expires.",
 					Required:    true,
 				},
@@ -50,7 +50,7 @@ func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 		"token_id":         token.TokenID,
 		"token_value":      token.TokenValue,
 		"application_id":   token.ApplicationID,
-		"lifetime_seconds": token.Lifetime,
+		"lifetime_seconds": int64(token.Lifetime / time.Second),
 		"comment":          token.Comment,
 		"creation_time":    token.CreationTime.Format(time.RFC3339),
 		"configuration":    token.Configuration,
