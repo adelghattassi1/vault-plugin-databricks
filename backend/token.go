@@ -118,7 +118,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
 	}
 	if databricksToken == "" {
-		return nil, fmt.Errorf("Databricks token not configured")
+		return nil, fmt.Errorf("databricks token not configured")
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+databricksToken)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -159,7 +159,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		TokenID:       tokenID,
 		TokenValue:    tokenValue,
 		ApplicationID: applicationID.(string),
-		Lifetime:      time.Duration(lifetimeSeconds.(int)),
+		Lifetime:      lifetimeSeconds.(time.Duration),
 		Comment:       comment.(string),
 		CreationTime:  CreationTime,
 		Configuration: configNameStr,
