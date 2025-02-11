@@ -158,14 +158,13 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("databricks API response missing token_id field")
 	}
 
-	creationTimeStr, ok := tokenInfo["creation_time"].(string)
-	if !ok {
-		return nil, fmt.Errorf("databricks API response missing creation_time field")
-	}
-
-	creationTime, err := time.Parse(time.RFC3339, creationTimeStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse creation_time: %v", err)
+	// Handle missing creation_time
+	creationTime := time.Now() // Default to current time
+	if creationTimeStr, found := tokenInfo["creation_time"].(string); found {
+		parsedTime, err := time.Parse(time.RFC3339, creationTimeStr)
+		if err == nil {
+			creationTime = parsedTime
+		}
 	}
 
 	lifetimeSecondsInt, ok := lifetimeSeconds.(int)
