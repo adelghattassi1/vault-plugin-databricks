@@ -17,6 +17,27 @@ func LT24HourTTLWarning(s string) string {
 	return fmt.Sprintf("%[1]s is set with less than 24 hours. With current token expiry limitation, this %[1]s is ignored", s)
 }
 
+func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	configName, ok := d.GetOk("name")
+	if !ok {
+		return nil, fmt.Errorf("config_name not provided")
+	}
+	configs, err := req.Storage.List(ctx, fmt.Sprintf("%s/", configName))
+	if err != nil {
+		return nil, err
+	}
+
+	// Prepare the response data
+	responseData := map[string]interface{}{
+		"config_entries": configs,
+	}
+
+	// Return the response with the list of config entries
+	return &logical.Response{
+		Data: responseData,
+	}, nil
+}
+
 // schema for the configuring Gitlab token plugin, this will map the fields coming in from the
 // vault request field map
 var configSchema = map[string]*framework.FieldSchema{
@@ -49,20 +70,35 @@ func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 }
 
 func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	// Get the config name from the input
 	name, ok := d.GetOk("name")
 	if !ok {
 		return nil, fmt.Errorf("name not provided")
 	}
 
-	key := fmt.Sprintf("config/%s", name.(string))
-	tokenKey := fmt.Sprintf("tokens/%s", name.(string))
-	if err := req.Storage.Delete(ctx, key); err != nil {
-		return nil, fmt.Errorf("failed to delete configuration: %v", err)
-	}
-	if err := req.Storage.Delete(ctx, tokenKey); err != nil {
-		return nil, fmt.Errorf("failed to delete Tokens within configuration: %v", err)
+	// Construct the keys for the configuration and its associated tokens
+	configKey := fmt.Sprintf("config/%s", name.(string))
+	tokensKey := fmt.Sprintf("tokens/%s", name.(string))
+
+	// List the tokens associated with this configuration
+	tokens, err := req.Storage.List(ctx, tokensKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tokens for configuration: %v", err)
 	}
 
+	for _, token := range tokens {
+		tokenKey := fmt.Sprintf("%s/%s", tokensKey, token)
+		if err := req.Storage.Delete(ctx, tokenKey); err != nil {
+			return nil, fmt.Errorf("failed to delete token %s: %v", token, err)
+		}
+	}
+
+	// Delete the configuration itself
+	if err := req.Storage.Delete(ctx, configKey); err != nil {
+		return nil, fmt.Errorf("failed to delete configuration: %v", err)
+	}
+
+	// Return no data as we are just performing a delete operation
 	return nil, nil
 }
 
@@ -159,6 +195,9 @@ func pathConfig(b *DatabricksBackend) []*framework.Path {
 				},
 				logical.DeleteOperation: &framework.PathOperation{
 					Callback: b.handleDeleteConfig,
+				},
+				logical.ListOperation: &framework.PathOperation{
+					Callback: b.listConfigEntries,
 				},
 			},
 
