@@ -300,7 +300,7 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("token_id not provided")
 	}
 
-	key := fmt.Sprintf("tokens/%s/%s", configName.(string), tokenID.(string))
+	key := fmt.Sprintf("tokens/%s/%s/", configName.(string), tokenID.(string))
 	if err := req.Storage.Delete(ctx, key); err != nil {
 		return nil, fmt.Errorf("failed to delete token: %v", err)
 	}
