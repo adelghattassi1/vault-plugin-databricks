@@ -144,24 +144,42 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 
 	tokenInfo, ok := responseMap["token_info"].(map[string]interface{})
-	tokenValue, ok := responseMap["token_value"].(string)
 	if !ok {
 		return nil, fmt.Errorf("databricks API response missing token_info field")
 	}
 
+	tokenValue, ok := responseMap["token_value"].(string)
+	if !ok {
+		return nil, fmt.Errorf("databricks API response missing token_value field")
+	}
+
 	tokenID, ok := tokenInfo["token_id"].(string)
-	CreationTime, ok := tokenInfo["creation_time"].(time.Time)
+	if !ok {
+		return nil, fmt.Errorf("databricks API response missing token_id field")
+	}
+
+	creationTimeStr, ok := tokenInfo["creation_time"].(string)
+	if !ok {
+		return nil, fmt.Errorf("databricks API response missing creation_time field")
+	}
+
+	creationTime, err := time.Parse(time.RFC3339, creationTimeStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse creation_time: %v", err)
+	}
+
+	lifetimeSecondsInt, ok := lifetimeSeconds.(int)
+	if !ok {
+		return nil, fmt.Errorf("invalid lifetime_seconds value")
 	}
 
 	tokenEntry := TokenStorageEntry{
 		TokenID:       tokenID,
 		TokenValue:    tokenValue,
 		ApplicationID: applicationID.(string),
-		Lifetime:      time.Duration(lifetimeSeconds.(int)),
+		Lifetime:      time.Duration(lifetimeSecondsInt) * time.Second,
 		Comment:       comment.(string),
-		CreationTime:  CreationTime,
+		CreationTime:  creationTime,
 		Configuration: configNameStr,
 	}
 
@@ -252,16 +270,6 @@ func pathDeleteToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_id>[^/]+)",
-			Fields: map[string]*framework.FieldSchema{
-				"config_name": {
-					Type:        framework.TypeString,
-					Description: "The name of the configuration under which the token is stored.",
-				},
-				"token_id": {
-					Type:        framework.TypeString,
-					Description: "The ID of the token to delete.",
-				},
-			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.DeleteOperation: &framework.PathOperation{
 					Callback: b.handleDeleteToken,
