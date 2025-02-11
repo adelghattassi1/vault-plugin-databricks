@@ -4,14 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 	"io"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 )
 
@@ -53,55 +50,21 @@ func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 		"token_id":         token.TokenID,
 		"token_value":      token.TokenValue,
 		"application_id":   token.ApplicationID,
-		"lifetime_seconds": token.Lifetime,
+		"lifetime_seconds": int64(token.Lifetime / time.Second),
 		"comment":          token.Comment,
-		"creation_time":    token.CreationTime,
+		"creation_time":    token.CreationTime.Format(time.RFC3339),
 		"configuration":    token.Configuration,
 	}
 }
 
-func parseLifetime(lifetime string) (int64, error) {
-	if lifetime == "" {
-		return 3600, nil // Default: 1 hour
-	}
-
-	if strings.HasSuffix(lifetime, "h") {
-		hours, err := strconv.Atoi(strings.TrimSuffix(lifetime, "h"))
-		if err != nil {
-			return 0, err
-		}
-		return int64(hours * 3600), nil
-	} else if strings.HasSuffix(lifetime, "m") {
-		minutes, err := strconv.Atoi(strings.TrimSuffix(lifetime, "m"))
-		if err != nil {
-			return 0, err
-		}
-		return int64(minutes * 60), nil
-	} else if strings.HasSuffix(lifetime, "d") {
-		days, err := strconv.Atoi(strings.TrimSuffix(lifetime, "d"))
-		if err != nil {
-			return 0, err
-		}
-		return int64(days * 86400), nil
-	}
-
-	// If no suffix, assume raw integer (seconds)
-	seconds, err := strconv.ParseInt(lifetime, 10, 64)
-	if err != nil {
-		return 0, errors.New("invalid lifetime format")
-	}
-
-	return seconds, nil
-}
-
 type TokenStorageEntry struct {
-	TokenID       string `json:"token_id" structs:"token_id" mapstructure:"token_id"`
-	TokenValue    string `json:"token_value" structs:"token_value" mapstructure:"token_value"`
-	ApplicationID string `json:"application_id" structs:"application_id" mapstructure:"application_id"`
-	Lifetime      int64  `json:"lifetime_seconds" structs:"lifetime_seconds" mapstructure:"lifetime_seconds"`
-	Comment       string `json:"comment" structs:"comment" mapstructure:"comment"`
-	CreationTime  int64  `json:"creation_time" structs:"creation_time" mapstructure:"creation_time"`
-	Configuration string `json:"configuration" structs:"configuration" mapstructure:"configuration"`
+	TokenID       string        `json:"token_id" structs:"token_id" mapstructure:"token_id"`
+	TokenValue    string        `json:"token_value" structs:"token_value" mapstructure:"token_value"`
+	ApplicationID string        `json:"application_id" structs:"application_id" mapstructure:"application_id"`
+	Lifetime      time.Duration `json:"lifetime_seconds" structs:"lifetime_seconds" mapstructure:"lifetime_seconds"`
+	Comment       string        `json:"comment" structs:"comment" mapstructure:"comment"`
+	CreationTime  time.Time     `json:"creation_time" structs:"creation_time" mapstructure:"creation_time"`
+	Configuration string        `json:"configuration" structs:"configuration" mapstructure:"configuration"`
 }
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
@@ -131,7 +94,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	if !ok {
 		return nil, fmt.Errorf("application_id not provided")
 	}
-	lifetimeSecond, ok := d.GetOk("lifetime_seconds")
+	lifetimeSeconds, ok := d.GetOk("lifetime_seconds")
 	if !ok {
 		return nil, fmt.Errorf("lifetime_seconds not provided")
 	}
@@ -139,7 +102,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 
 	requestPayload := map[string]interface{}{
 		"application_id":   applicationID.(string),
-		"lifetime_seconds": lifetimeSecond,
+		"lifetime_seconds": lifetimeSeconds,
 		"comment":          comment,
 	}
 
@@ -194,94 +157,43 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	if !ok {
 		return nil, fmt.Errorf("databricks API response missing token_id field")
 	}
-	// Parse lifetime_seconds, default to 3600 (1 hour)
-	// Default lifetime to 1 hour (3600 seconds)
-	lifetimeSeconds := int64(3600)
 
-	if lifetimeRaw, ok := d.GetOk("lifetime_seconds"); ok {
-		var err error
-		lifetimeSeconds, err = parseLifetime(lifetimeRaw.(string)) // Type assertion to string
-		if err != nil {
-			return nil, fmt.Errorf("invalid lifetime_seconds format: %v", err)
+	// Handle missing creation_time
+	creationTime := time.Now() // Default to current time
+	if creationTimeStr, found := tokenInfo["creation_time"].(string); found {
+		parsedTime, err := time.Parse(time.RFC3339, creationTimeStr)
+		if err == nil {
+			creationTime = parsedTime
 		}
 	}
 
-	// Get the current time in milliseconds
-	creationTime := time.Now().UnixMilli()
+	lifetimeSecondsInt, ok := lifetimeSeconds.(int)
+	if !ok {
+		return nil, fmt.Errorf("invalid lifetime_seconds value")
+	}
 
-	// Calculate expiry time (ensure lifetimeSeconds is in int64)
-	expiryTime := creationTime + (lifetimeSeconds * 1000) // Expiry time in milliseconds
-
-	// Convert timestamps to human-readable format
-	creationTimeReadable := time.UnixMilli(creationTime).Format(time.RFC3339)
-	expiryTimeReadable := time.UnixMilli(expiryTime).Format(time.RFC3339)
-
-	tokenData := TokenStorageEntry{
-		ApplicationID: applicationID.(string),
-		Comment:       comment.(string),
-		Configuration: configName.(string),
+	tokenEntry := TokenStorageEntry{
 		TokenID:       tokenID,
 		TokenValue:    tokenValue,
+		ApplicationID: applicationID.(string),
+		Lifetime:      time.Duration(lifetimeSecondsInt) * time.Second,
+		Comment:       comment.(string),
 		CreationTime:  creationTime,
-		Lifetime:      expiryTime,
+		Configuration: configNameStr,
 	}
 
-	entryJSON, err := json.Marshal(tokenData)
+	storageEntry, err := logical.StorageEntryJSON(fmt.Sprintf("tokens/%s/%s", configNameStr, tokenEntry.TokenID), tokenEntry)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal token data: %v", err)
+		return nil, fmt.Errorf("failed to create storage entry: %v", err)
 	}
-
-	// Store token
-	if err := req.Storage.Put(ctx, &logical.StorageEntry{
-		Key:   fmt.Sprintf("tokens/%s/%s", configName.(string), tokenID),
-		Value: entryJSON,
-	}); err != nil {
-		return nil, fmt.Errorf("failed to store token: %v", err)
+	if err := req.Storage.Put(ctx, storageEntry); err != nil {
+		return nil, fmt.Errorf("failed to store token in Vault: %v", err)
 	}
 
 	return &logical.Response{
-		Data: map[string]interface{}{
-			"application_id":  tokenData.ApplicationID,
-			"comment":         tokenData.Comment,
-			"configuration":   tokenData.Configuration,
-			"token_id":        tokenData.TokenID,
-			"token_value":     tokenData.TokenValue,
-			"creation_time":   tokenData.CreationTime,
-			"expiry_time":     tokenData.Lifetime,
-			"creation_time_h": creationTimeReadable,
-			"expiry_time_h":   expiryTimeReadable,
-		},
+		Data: tokenDetail(&tokenEntry),
 	}, nil
 }
-
-//
-//	lifetimeSecondsInt, ok := lifetimeSeconds.(int)
-//	if !ok {
-//		return nil, fmt.Errorf("invalid lifetime_seconds value")
-//	}
-//
-//	tokenEntry := TokenStorageEntry{
-//		TokenID:       tokenID,
-//		TokenValue:    tokenValue,
-//		ApplicationID: applicationID.(string),
-//		Lifetime:      time.Duration(lifetimeSecondsInt) * time.Second,
-//		Comment:       comment.(string),
-//		CreationTime:  creationTime,
-//		Configuration: configNameStr,
-//	}
-//
-//	storageEntry, err := logical.StorageEntryJSON(fmt.Sprintf("tokens/%s/%s", configNameStr, tokenEntry.TokenID), tokenEntry)
-//	if err != nil {
-//		return nil, fmt.Errorf("failed to create storage entry: %v", err)
-//	}
-//	if err := req.Storage.Put(ctx, storageEntry); err != nil {
-//		return nil, fmt.Errorf("failed to store token in Vault: %v", err)
-//	}
-//
-//	return &logical.Response{
-//		Data: tokenDetail(&tokenEntry),
-//	}, nil
-//}
 
 func pathReadToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
