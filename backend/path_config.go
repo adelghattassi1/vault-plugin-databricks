@@ -18,13 +18,10 @@ func LT24HourTTLWarning(s string) string {
 }
 
 func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	configName, ok := d.GetOk("name")
-	if !ok {
-		return nil, fmt.Errorf("config_name not provided")
-	}
-	configs, err := req.Storage.List(ctx, fmt.Sprintf("%s/", configName))
+	// List all keys at the root level where configurations are stored
+	configs, err := req.Storage.List(ctx, "config/")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list config entries: %v", err)
 	}
 
 	// Prepare the response data
@@ -32,7 +29,7 @@ func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.
 		"config_entries": configs,
 	}
 
-	// Return the response with the list of config entries
+	// Return the response with the list of configuration entries
 	return &logical.Response{
 		Data: responseData,
 	}, nil
@@ -93,12 +90,10 @@ func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical
 		}
 	}
 
-	// Delete the configuration itself
 	if err := req.Storage.Delete(ctx, configKey); err != nil {
 		return nil, fmt.Errorf("failed to delete configuration: %v", err)
 	}
 
-	// Return no data as we are just performing a delete operation
 	return nil, nil
 }
 
@@ -196,6 +191,21 @@ func pathConfig(b *DatabricksBackend) []*framework.Path {
 				logical.DeleteOperation: &framework.PathOperation{
 					Callback: b.handleDeleteConfig,
 				},
+			},
+
+			HelpSynopsis:    pathConfigHelpSyn,
+			HelpDescription: pathConfigHelpDesc,
+		},
+	}
+
+	return paths
+}
+
+func pathConfigList(b *DatabricksBackend) []*framework.Path {
+	paths := []*framework.Path{
+		{
+			Pattern: "configs",
+			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
 					Callback: b.listConfigEntries,
 				},
