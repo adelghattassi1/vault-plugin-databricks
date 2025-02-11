@@ -45,17 +45,6 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 		},
 	}
 }
-func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
-	return map[string]interface{}{
-		"token_id":         token.TokenID,
-		"token_value":      token.TokenValue,
-		"application_id":   token.ApplicationID,
-		"lifetime_seconds": int64(token.Lifetime / time.Second),
-		"comment":          token.Comment,
-		"creation_time":    token.CreationTime.Format(time.RFC3339),
-		"configuration":    token.Configuration,
-	}
-}
 
 type TokenStorageEntry struct {
 	TokenID       string        `json:"token_id" structs:"token_id" mapstructure:"token_id"`
@@ -64,7 +53,21 @@ type TokenStorageEntry struct {
 	Lifetime      time.Duration `json:"lifetime_seconds" structs:"lifetime_seconds" mapstructure:"lifetime_seconds"`
 	Comment       string        `json:"comment" structs:"comment" mapstructure:"comment"`
 	CreationTime  time.Time     `json:"creation_time" structs:"creation_time" mapstructure:"creation_time"`
+	ExpiryTime    time.Time     `json:"expiry_time" structs:"expiry_time" mapstructure:"expiry_time"` // Added ExpiryTime
 	Configuration string        `json:"configuration" structs:"configuration" mapstructure:"configuration"`
+}
+
+func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
+	return map[string]interface{}{
+		"token_id":         token.TokenID,
+		"token_value":      token.TokenValue,
+		"application_id":   token.ApplicationID,
+		"lifetime_seconds": int64(token.Lifetime / time.Second),
+		"comment":          token.Comment,
+		"creation_time":    token.CreationTime.Format(time.RFC3339),
+		"expiry_time":      token.ExpiryTime.Format(time.RFC3339), // Added expiry_time
+		"configuration":    token.Configuration,
+	}
 }
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
@@ -158,14 +161,18 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("databricks API response missing token_id field")
 	}
 
-	// Handle missing creation_time
-	creationTime := time.Now() // Default to current time
-	if creationTimeStr, found := tokenInfo["creation_time"].(string); found {
-		parsedTime, err := time.Parse(time.RFC3339, creationTimeStr)
-		if err == nil {
-			creationTime = parsedTime
-		}
+	// Parse creation_time and expiry_time from milliseconds
+	creationTimeMillis, ok := tokenInfo["creation_time"].(float64) // It's likely returned as a float
+	if !ok {
+		return nil, fmt.Errorf("databricks API response missing or invalid creation_time field")
 	}
+	creationTime := time.Unix(0, int64(creationTimeMillis)*int64(time.Millisecond))
+
+	expiryTimeMillis, ok := tokenInfo["expiry_time"].(float64) // It's likely returned as a float
+	if !ok {
+		return nil, fmt.Errorf("databricks API response missing or invalid expiry_time field")
+	}
+	expiryTime := time.Unix(0, int64(expiryTimeMillis)*int64(time.Millisecond))
 
 	lifetimeSecondsInt, ok := lifetimeSeconds.(int)
 	if !ok {
@@ -179,6 +186,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		Lifetime:      time.Duration(lifetimeSecondsInt) * time.Second,
 		Comment:       comment.(string),
 		CreationTime:  creationTime,
+		ExpiryTime:    expiryTime, // Use expiry time from response
 		Configuration: configNameStr,
 	}
 
