@@ -55,8 +55,12 @@ func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical
 	}
 
 	key := fmt.Sprintf("config/%s", name.(string))
+	tokenKey := fmt.Sprintf("tokens/%s", name.(string))
 	if err := req.Storage.Delete(ctx, key); err != nil {
 		return nil, fmt.Errorf("failed to delete configuration: %v", err)
+	}
+	if err := req.Storage.Delete(ctx, tokenKey); err != nil {
+		return nil, fmt.Errorf("failed to delete Tokens within configuration: %v", err)
 	}
 
 	return nil, nil
