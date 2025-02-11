@@ -237,13 +237,16 @@ func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Re
 		return nil, fmt.Errorf("token not found for config: %s", configName.(string))
 	}
 
-	var tokenData map[string]interface{}
+	var tokenData TokenStorageEntry
 	if err := json.Unmarshal(entry.Value, &tokenData); err != nil {
 		return nil, fmt.Errorf("failed to parse stored token data: %v", err)
 	}
 
+	// Ensure lifetime is converted from nanoseconds to seconds
+	tokenData.Lifetime = time.Duration(tokenData.Lifetime.Seconds()) * time.Second
+
 	return &logical.Response{
-		Data: tokenData,
+		Data: tokenDetail(&tokenData),
 	}, nil
 }
 
