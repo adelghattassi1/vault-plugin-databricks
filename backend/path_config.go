@@ -74,21 +74,21 @@ func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical
 	}
 
 	// Construct the keys for the configuration and its associated tokens
-	configKey := fmt.Sprintf("config/%s/", name.(string))
-	tokensKey := fmt.Sprintf("tokens/%s", name.(string))
-
-	// List the tokens associated with this configuration
-	tokens, err := req.Storage.List(ctx, tokensKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list tokens for configuration: %v", err)
-	}
-
-	for _, token := range tokens {
-		tokenKey := fmt.Sprintf("%s/%s/", tokensKey, token)
-		if err := req.Storage.Delete(ctx, tokenKey); err != nil {
-			return nil, fmt.Errorf("failed to delete token %s: %v", token, err)
-		}
-	}
+	configKey := fmt.Sprintf("config/%s", name.(string))
+	//tokensKey := fmt.Sprintf("tokens/%s", name.(string))
+	//
+	//// List the tokens associated with this configuration
+	//tokens, err := req.Storage.List(ctx, tokensKey)
+	//if err != nil {
+	//	return nil, fmt.Errorf("failed to list tokens for configuration: %v", err)
+	//}
+	//
+	//for _, token := range tokens {
+	//	tokenKey := fmt.Sprintf("%s/%s", tokensKey, token)
+	//	if err := req.Storage.Delete(ctx, tokenKey); err != nil {
+	//		return nil, fmt.Errorf("failed to delete token %s: %v", token, err)
+	//	}
+	//}
 
 	if err := req.Storage.Delete(ctx, configKey); err != nil {
 		return nil, fmt.Errorf("failed to delete configuration: %v", err)
@@ -205,6 +205,7 @@ func pathConfigList(b *DatabricksBackend) []*framework.Path {
 	paths := []*framework.Path{
 		{
 			Pattern: "configs",
+			Fields:  configSchema,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
 					Callback: b.listConfigEntries,
