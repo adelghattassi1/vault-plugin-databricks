@@ -279,7 +279,17 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 func pathDeleteToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_id>[^/]+)",
+			Pattern: fmt.Sprintf("token/%s/%s", framework.GenericNameRegex("config_name"), framework.GenericNameRegex("token_id")),
+			Fields: map[string]*framework.FieldSchema{
+				"config_name": {
+					Type:        framework.TypeString,
+					Description: "The name of the configuration under which the token is stored.",
+				},
+				"token_id": {
+					Type:        framework.TypeString,
+					Description: "The ID of the token to update.",
+				},
+			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.DeleteOperation: &framework.PathOperation{
 					Callback: b.handleDeleteToken,
@@ -300,7 +310,7 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("token_id not provided")
 	}
 
-	key := fmt.Sprintf("tokens/%s/%s/", configName.(string), tokenID.(string))
+	key := fmt.Sprintf("tokens/%s/%s", configName.(string), tokenID.(string))
 	if err := req.Storage.Delete(ctx, key); err != nil {
 		return nil, fmt.Errorf("failed to delete token: %v", err)
 	}
