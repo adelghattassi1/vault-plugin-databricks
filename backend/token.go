@@ -203,7 +203,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}, nil
 }
 
-func pathReadToken(b *DatabricksBackend) []*framework.Path {
+func pathReadDeleteToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_id>[^/]+)",
@@ -220,6 +220,9 @@ func pathReadToken(b *DatabricksBackend) []*framework.Path {
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
 					Callback: b.handleReadToken,
+				},
+				logical.DeleteOperation: &framework.PathOperation{
+					Callback: b.handleDeleteToken,
 				},
 			},
 		},
@@ -276,28 +279,6 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 		},
 	}
 }
-func pathDeleteToken(b *DatabricksBackend) []*framework.Path {
-	return []*framework.Path{
-		{
-			Pattern: fmt.Sprintf("token/%s/%s", framework.GenericNameRegex("config_name"), framework.GenericNameRegex("token_id")),
-			Fields: map[string]*framework.FieldSchema{
-				"config_name": {
-					Type:        framework.TypeString,
-					Description: "The name of the configuration under which the token is stored.",
-				},
-				"token_id": {
-					Type:        framework.TypeString,
-					Description: "The ID of the token to update.",
-				},
-			},
-			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.DeleteOperation: &framework.PathOperation{
-					Callback: b.handleDeleteToken,
-				},
-			},
-		},
-	}
-}
 
 func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	configName, ok := d.GetOk("config_name")
@@ -349,7 +330,7 @@ func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.R
 func pathUpdateToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: "token/update/(?P<config_name>[^/]+)/(?P<token_id>[^/]+)",
+			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_id>[^/]+)",
 			Fields: map[string]*framework.FieldSchema{
 				"config_name": {
 					Type:        framework.TypeString,
