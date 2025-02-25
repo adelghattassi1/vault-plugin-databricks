@@ -125,8 +125,8 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		ApplicationID: applicationID,
 		Lifetime:      time.Duration(lifetimeSeconds) * time.Second,
 		Comment:       comment,
-		CreationTime:  time.Unix(token.TokenInfo.CreationTime, 0),
-		ExpiryTime:    time.Unix(token.TokenInfo.ExpiryTime, 0),
+		CreationTime:  time.UnixMilli(token.TokenInfo.CreationTime),
+		ExpiryTime:    time.UnixMilli(token.TokenInfo.ExpiryTime),
 		Configuration: configName,
 	}
 
