@@ -1,14 +1,13 @@
 package backend
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/databricks/databricks-sdk-go"
+	"github.com/databricks/databricks-sdk-go/service/settings"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
-	"io"
-	"net/http"
 	"time"
 )
 
@@ -71,133 +70,78 @@ func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 }
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	configName, ok := d.GetOk("config_name")
-	if !ok {
-		return nil, fmt.Errorf("config_name not provided")
-	}
-	configNameStr := configName.(string)
+	// Retrieve and validate inputs
+	configName := d.Get("config_name").(string)
+	applicationID := d.Get("application_id").(string)
+	lifetimeSeconds := d.Get("lifetime_seconds").(int)
+	comment := d.Get("comment").(string)
 
-	entry, err := req.Storage.Get(ctx, "config/"+configNameStr)
+	// Validate lifetime
+	if lifetimeSeconds < 60 || lifetimeSeconds > 7776000 {
+		return nil, fmt.Errorf("lifetime_seconds must be between 60 and 7776000")
+	}
+
+	// Retrieve configuration
+	configEntry, err := req.Storage.Get(ctx, "config/"+configName)
 	if err != nil {
+		b.Logger().Error("Failed to retrieve configuration", "error", err)
 		return nil, fmt.Errorf("failed to retrieve configuration: %v", err)
 	}
-	if entry == nil {
-		return nil, fmt.Errorf("configuration not found with name: %s", configNameStr)
+	if configEntry == nil {
+		return nil, fmt.Errorf("configuration not found: %s", configName)
 	}
-
 	var config ConfigStorageEntry
-	if err := entry.DecodeJSON(&config); err != nil {
+	if err := configEntry.DecodeJSON(&config); err != nil {
+		b.Logger().Error("Failed to decode configuration", "error", err)
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
-	databricksInstance := config.BaseURL
-	databricksToken := config.Token
-
-	applicationID, ok := d.GetOk("application_id")
-	if !ok {
-		return nil, fmt.Errorf("application_id not provided")
-	}
-	lifetimeSeconds, ok := d.GetOk("lifetime_seconds")
-	if !ok {
-		return nil, fmt.Errorf("lifetime_seconds not provided")
-	}
-	comment, _ := d.GetOk("comment") // Comment is optional
-
-	requestPayload := map[string]interface{}{
-		"application_id":   applicationID.(string),
-		"lifetime_seconds": lifetimeSeconds,
-		"comment":          comment,
-	}
-
-	requestBody, err := json.Marshal(requestPayload)
+	// Initialize Databricks client
+	client, err := databricks.NewWorkspaceClient(&databricks.Config{
+		Host:  config.BaseURL,
+		Token: config.Token,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %v", err)
+		b.Logger().Error("Failed to create Databricks client", "error", err)
+		return nil, fmt.Errorf("failed to create Databricks client: %v", err)
 	}
 
-	apiURL := fmt.Sprintf("%s/api/2.0/token-management/on-behalf-of/tokens", databricksInstance)
-
-	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(requestBody))
+	// Create token using Databricks SDK, corrected to CreateOboToken
+	request := settings.CreateOboTokenRequest{
+		ApplicationId:   applicationID,
+		Comment:         comment,
+		LifetimeSeconds: int64(lifetimeSeconds),
+	}
+	token, err := client.TokenManagement.CreateOboToken(ctx, request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
-	}
-	if databricksToken == "" {
-		return nil, fmt.Errorf("databricks token not configured")
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+databricksToken)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	client := b.getClient() // Assume b.getClient() returns an *http.Client
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to perform HTTP request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to create token, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
+		b.Logger().Error("Failed to create token", "error", err)
+		return nil, fmt.Errorf("failed to create token: %v", err)
 	}
 
-	var responseMap map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &responseMap); err != nil {
-		return nil, fmt.Errorf("failed to parse Databricks API response: %v", err)
-	}
-
-	tokenInfo, ok := responseMap["token_info"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("databricks API response missing token_info field")
-	}
-
-	tokenValue, ok := responseMap["token_value"].(string)
-	if !ok {
-		return nil, fmt.Errorf("databricks API response missing token_value field")
-	}
-
-	tokenID, ok := tokenInfo["token_id"].(string)
-	if !ok {
-		return nil, fmt.Errorf("databricks API response missing token_id field")
-	}
-
-	// Parse creation_time and expiry_time from milliseconds
-	creationTimeMillis, ok := tokenInfo["creation_time"].(float64) // It's likely returned as a float
-	if !ok {
-		return nil, fmt.Errorf("databricks API response missing or invalid creation_time field")
-	}
-	creationTime := time.Unix(0, int64(creationTimeMillis)*int64(time.Millisecond))
-
-	expiryTimeMillis, ok := tokenInfo["expiry_time"].(float64) // It's likely returned as a float
-	if !ok {
-		return nil, fmt.Errorf("databricks API response missing or invalid expiry_time field")
-	}
-	expiryTime := time.Unix(0, int64(expiryTimeMillis)*int64(time.Millisecond))
-
-	lifetimeSecondsInt, ok := lifetimeSeconds.(int)
-	if !ok {
-		return nil, fmt.Errorf("invalid lifetime_seconds value")
-	}
-
+	// Create token entry
 	tokenEntry := TokenStorageEntry{
-		TokenID:       tokenID,
-		TokenValue:    tokenValue,
-		ApplicationID: applicationID.(string),
-		Lifetime:      time.Duration(lifetimeSecondsInt) * time.Second,
-		Comment:       comment.(string),
-		CreationTime:  creationTime,
-		ExpiryTime:    expiryTime, // Use expiry time from response
-		Configuration: configNameStr,
+		TokenID:       token.TokenInfo.TokenId,
+		TokenValue:    token.TokenValue,
+		ApplicationID: applicationID,
+		Lifetime:      time.Duration(lifetimeSeconds) * time.Second,
+		Comment:       comment,
+		CreationTime:  time.Unix(token.TokenInfo.CreationTime, 0),
+		ExpiryTime:    time.Unix(token.TokenInfo.ExpiryTime, 0),
+		Configuration: configName,
 	}
 
-	storageEntry, err := logical.StorageEntryJSON(fmt.Sprintf("tokens/%s/%s", configNameStr, tokenEntry.TokenID), tokenEntry)
+	// Store token in Vault
+	storageEntry, err := logical.StorageEntryJSON(fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, token.TokenInfo.TokenId), tokenEntry)
 	if err != nil {
+		b.Logger().Error("Failed to create storage entry", "error", err)
 		return nil, fmt.Errorf("failed to create storage entry: %v", err)
 	}
 	if err := req.Storage.Put(ctx, storageEntry); err != nil {
-		return nil, fmt.Errorf("failed to store token in Vault: %v", err)
+		b.Logger().Error("Failed to store token", "error", err)
+		return nil, fmt.Errorf("failed to store token: %v", err)
 	}
 
+	b.Logger().Info("Token created successfully", "token_id", token.TokenInfo.TokenId)
 	return &logical.Response{
 		Data: tokenDetail(&tokenEntry),
 	}, nil
