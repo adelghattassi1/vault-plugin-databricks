@@ -395,7 +395,7 @@ func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.R
 func pathUpdateToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_name>[^/]+)", // Use token_name
+			Pattern: fmt.Sprintf("token/%s/%s", framework.GenericNameRegex("config_name"), framework.GenericNameRegex("token_name")),
 			Fields: map[string]*framework.FieldSchema{
 				"config_name": {
 					Type:        framework.TypeString,
