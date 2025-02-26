@@ -22,6 +22,11 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 					Description: "Name of the configuration to use for token creation.",
 					Required:    true,
 				},
+				"token_name": { // Added token_name field
+					Type:        framework.TypeString,
+					Description: "Unique name for the token within the configuration.",
+					Required:    true,
+				},
 				"application_id": {
 					Type:        framework.TypeString,
 					Description: "Application ID of the service principal.",
@@ -47,20 +52,22 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 }
 
 type TokenStorageEntry struct {
-	TokenID         string        `json:"token_id" structs:"token_id" mapstructure:"token_id"`
-	TokenValue      string        `json:"token_value" structs:"token_value" mapstructure:"token_value"`
-	ApplicationID   string        `json:"application_id" structs:"application_id" mapstructure:"application_id"`
-	Lifetime        time.Duration `json:"lifetime_seconds" structs:"lifetime_seconds" mapstructure:"lifetime_seconds"`
-	Comment         string        `json:"comment" structs:"comment" mapstructure:"comment"`
-	CreationTime    time.Time     `json:"creation_time" structs:"creation_time" mapstructure:"creation_time"`
-	ExpiryTime      time.Time     `json:"expiry_time" structs:"expiry_time" mapstructure:"expiry_time"`
-	Configuration   string        `json:"configuration" structs:"configuration" mapstructure:"configuration"`
+	TokenName       string        `json:"token_name"` // Added TokenName
+	TokenID         string        `json:"token_id"`
+	TokenValue      string        `json:"token_value"`
+	ApplicationID   string        `json:"application_id"`
+	Lifetime        time.Duration `json:"lifetime_seconds"`
+	Comment         string        `json:"comment"`
+	CreationTime    time.Time     `json:"creation_time"`
+	ExpiryTime      time.Time     `json:"expiry_time"`
+	Configuration   string        `json:"configuration"`
 	LastRotated     time.Time     `json:"last_rotated"`
 	RotationEnabled bool          `json:"rotation_enabled"`
 }
 
 func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 	return map[string]interface{}{
+		"token_name":       token.TokenName, // Added token_name
 		"token_id":         token.TokenID,
 		"token_value":      token.TokenValue,
 		"application_id":   token.ApplicationID,
@@ -76,6 +83,7 @@ func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	configName := d.Get("config_name").(string)
+	tokenName := d.Get("token_name").(string)
 	applicationID := d.Get("application_id").(string)
 	lifetimeSeconds := d.Get("lifetime_seconds").(int)
 	comment := d.Get("comment").(string)
@@ -111,18 +119,28 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	b.clients[configName] = client
 	b.lock.Unlock()
 
-	request := settings.CreateOboTokenRequest{
+	// Check if token_name already exists
+	storagePath := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenName)
+	existingEntry, err := req.Storage.Get(ctx, storagePath)
+	if err != nil {
+		return nil, fmt.Errorf("error checking existing token: %v", err)
+	}
+	if existingEntry != nil {
+		return nil, fmt.Errorf("token with name %s already exists in configuration %s", tokenName, configName)
+	}
+
+	token, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
 		ApplicationId:   applicationID,
 		Comment:         comment,
 		LifetimeSeconds: int64(lifetimeSeconds),
-	}
-	token, err := client.TokenManagement.CreateOboToken(ctx, request)
+	})
 	if err != nil {
 		b.Logger().Error("Failed to create token", "error", err)
 		return nil, fmt.Errorf("failed to create token: %v", err)
 	}
 
 	tokenEntry := TokenStorageEntry{
+		TokenName:       tokenName, // Set TokenName
 		TokenID:         token.TokenInfo.TokenId,
 		TokenValue:      token.TokenValue,
 		ApplicationID:   applicationID,
@@ -135,7 +153,8 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		RotationEnabled: true,
 	}
 
-	storageEntry, err := logical.StorageEntryJSON(fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, token.TokenInfo.TokenId), tokenEntry)
+	// Use token_name in the storage path instead of token_id
+	storageEntry, err := logical.StorageEntryJSON(storagePath, tokenEntry)
 	if err != nil {
 		b.Logger().Error("Failed to create storage entry", "error", err)
 		return nil, fmt.Errorf("failed to create storage entry: %v", err)
@@ -145,14 +164,14 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to store token: %v", err)
 	}
 
-	b.Logger().Info("Token created successfully", "token_id", token.TokenInfo.TokenId)
+	b.Logger().Info("Token created successfully", "token_name", tokenName)
 	return &logical.Response{
 		Data: tokenDetail(&tokenEntry),
 	}, nil
 }
 
-func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage logical.Storage, configName, tokenID string) {
-	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenID)
+func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage logical.Storage, configName, tokenName string) {
+	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenName) // Use tokenName
 
 	entry, err := storage.Get(ctx, path)
 	if err != nil || entry == nil {
@@ -195,22 +214,21 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		b.lock.Unlock()
 	}
 
-	// Revoke old token using Delete (correct method as per Databricks SDK)
-	err = client.TokenManagement.DeleteByTokenId(ctx, token.TokenID)
-	if err != nil {
-		b.Logger().Warn("Failed to revoke old token during rotation", "error", err)
-	}
-
+	// Create new token first
 	newToken, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
 		ApplicationId:   token.ApplicationID,
 		Comment:         token.Comment,
 		LifetimeSeconds: int64(token.Lifetime / time.Second),
 	})
 	if err != nil {
-		b.Logger().Error("Failed to rotate token", "error", err)
+		b.Logger().Error("Failed to create new token during rotation", "error", err)
 		return
 	}
 
+	// Store the old token ID to revoke later
+	oldTokenID := token.TokenID
+
+	// Update token details with new token info
 	token.TokenID = newToken.TokenInfo.TokenId
 	token.TokenValue = newToken.TokenValue
 	token.CreationTime = time.UnixMilli(newToken.TokenInfo.CreationTime)
@@ -219,6 +237,7 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 
 	newEntry, err := logical.StorageEntryJSON(path, token)
 	if err != nil {
+		b.Logger().Error("Failed to create storage entry for rotated token", "error", err)
 		return
 	}
 	if err := storage.Put(ctx, newEntry); err != nil {
@@ -226,21 +245,28 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		return
 	}
 
-	b.Logger().Info("Successfully rotated token", "token_id", tokenID)
+	// Revoke old token only after new token is successfully stored
+	err = client.TokenManagement.DeleteByTokenId(ctx, oldTokenID)
+	if err != nil {
+		b.Logger().Warn("Failed to revoke old token after rotation", "error", err)
+		// Continue since new token is already in place
+	}
+
+	b.Logger().Info("Successfully rotated token", "token_name", tokenName)
 }
 
 func pathReadDeleteToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_id>[^/]+)",
+			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_name>[^/]+)", // Use token_name
 			Fields: map[string]*framework.FieldSchema{
 				"config_name": {
 					Type:        framework.TypeString,
 					Description: "The name of the configuration under which the token is stored.",
 				},
-				"token_id": {
+				"token_name": { // Changed from token_id
 					Type:        framework.TypeString,
-					Description: "The ID of the token to read.",
+					Description: "The name of the token to read or delete.",
 				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
@@ -261,25 +287,23 @@ func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Re
 		return nil, fmt.Errorf("config_name not provided")
 	}
 
-	tokenID, ok := d.GetOk("token_id")
+	tokenName, ok := d.GetOk("token_name") // Changed from token_id
 	if !ok {
-		return nil, fmt.Errorf("token_id not provided")
+		return nil, fmt.Errorf("token_name not provided")
 	}
 
-	entry, err := req.Storage.Get(ctx, fmt.Sprintf("%s/%s/%s", pathPatternToken, configName.(string), tokenID.(string)))
+	entry, err := req.Storage.Get(ctx, fmt.Sprintf("%s/%s/%s", pathPatternToken, configName.(string), tokenName.(string)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read token: %v", err)
 	}
 	if entry == nil {
-		return nil, fmt.Errorf("token not found for config: %s", configName.(string))
+		return nil, fmt.Errorf("token not found for config: %s, token_name: %s", configName.(string), tokenName.(string))
 	}
 
 	var tokenData TokenStorageEntry
 	if err := json.Unmarshal(entry.Value, &tokenData); err != nil {
 		return nil, fmt.Errorf("failed to parse stored token data: %v", err)
 	}
-
-	tokenData.Lifetime = time.Duration(tokenData.Lifetime.Seconds()) * time.Second
 
 	return &logical.Response{
 		Data: tokenDetail(&tokenData),
@@ -292,14 +316,13 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("config_name not provided")
 	}
 
-	tokenID, ok := d.GetOk("token_id")
+	tokenName, ok := d.GetOk("token_name") // Changed from token_id
 	if !ok {
-		return nil, fmt.Errorf("token_id not provided")
+		return nil, fmt.Errorf("token_name not provided")
 	}
 
-	key := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName.(string), tokenID.(string))
+	key := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName.(string), tokenName.(string))
 
-	// Revoke token from Databricks before deletion
 	entry, err := req.Storage.Get(ctx, key)
 	if err == nil && entry != nil {
 		var token TokenStorageEntry
@@ -326,7 +349,7 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 func pathListTokens(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: fmt.Sprintf("tokens/%s?/?", framework.GenericNameRegex("config_name")),
+			Pattern: "tokens/(?P<config_name>[^/]+)",
 			Fields: map[string]*framework.FieldSchema{
 				"config_name": {
 					Type:        framework.TypeString,
@@ -342,47 +365,39 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 	}
 }
 
-func listTokensEntries(ctx context.Context, storage logical.Storage, d *framework.FieldData) ([]string, error) {
+func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	// Extract the config_name field from the request data
 	configName, ok := d.GetOk("config_name")
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
 	}
-	tokens, err := storage.List(ctx, fmt.Sprintf("%s/%s/", pathPatternToken, configName))
-	if err != nil {
-		return nil, err
-	}
-	return tokens, nil
-}
 
-func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	warnings := []string{}
-	tokens, err := listTokensEntries(ctx, req.Storage, d)
-	b.Logger().Info("Keys found", "keys", tokens)
+	// List tokens from storage
+	tokens, err := req.Storage.List(ctx, fmt.Sprintf("%s/%s/", pathPatternToken, configName))
 	if err != nil {
-		return nil, fmt.Errorf("failed to list tokens: %s", tokens)
+		return nil, fmt.Errorf("failed to list tokens: %v", err)
 	}
-	resp := &logical.Response{
-		Data:     map[string]interface{}{},
-		Warnings: warnings,
-	}
-	if len(tokens) != 0 {
-		resp.Data["keys"] = tokens
-	}
-	return resp, nil
+
+	// Return a successful response with the token list
+	return &logical.Response{
+		Data: map[string]interface{}{
+			"keys": tokens,
+		},
+	}, nil
 }
 
 func pathUpdateToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_id>[^/]+)",
+			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_name>[^/]+)", // Use token_name
 			Fields: map[string]*framework.FieldSchema{
 				"config_name": {
 					Type:        framework.TypeString,
 					Description: "The name of the configuration under which the token is stored.",
 				},
-				"token_id": {
+				"token_name": { // Changed from token_id
 					Type:        framework.TypeString,
-					Description: "The ID of the token to update.",
+					Description: "The name of the token to update.",
 				},
 				"comment": {
 					Type:        framework.TypeString,
@@ -409,19 +424,15 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("config_name not provided")
 	}
 
-	tokenID, ok := d.GetOk("token_id")
+	tokenName, ok := d.GetOk("token_name") // Changed from token_id
 	if !ok {
-		return nil, fmt.Errorf("token_id not provided")
+		return nil, fmt.Errorf("token_name not provided")
 	}
 
-	newComment, ok := d.GetOk("comment")
-	if !ok {
-		return nil, fmt.Errorf("comment not provided")
-	}
-
-	entry, err := req.Storage.Get(ctx, fmt.Sprintf("%s/%s/%s", pathPatternToken, configName.(string), tokenID.(string)))
+	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName.(string), tokenName.(string))
+	entry, err := req.Storage.Get(ctx, path)
 	if err != nil || entry == nil {
-		return nil, fmt.Errorf("failed to find token: %v", err)
+		return nil, fmt.Errorf("token not found: %s", tokenName.(string))
 	}
 
 	var token TokenStorageEntry
@@ -429,16 +440,17 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to parse token data: %v", err)
 	}
 
-	token.Comment = newComment.(string)
+	if comment, ok := d.GetOk("comment"); ok {
+		token.Comment = comment.(string)
+	}
 	if rotationEnabled, ok := d.GetOk("rotation_enabled"); ok {
 		token.RotationEnabled = rotationEnabled.(bool)
 	}
 
-	newEntry, err := logical.StorageEntryJSON(fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenID), token)
+	newEntry, err := logical.StorageEntryJSON(path, token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create storage entry: %v", err)
 	}
-
 	if err := req.Storage.Put(ctx, newEntry); err != nil {
 		return nil, fmt.Errorf("failed to update token: %v", err)
 	}

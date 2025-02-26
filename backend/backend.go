@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	tokenCheckInterval  = 5 * time.Minute // Check every hour
-	rotationGracePeriod = 1 * time.Minute // Rotate 1 hour before expiry
+	tokenCheckInterval  = 5 * time.Minute
+	rotationGracePeriod = 1 * time.Minute
 )
 
 type DatabricksBackend struct {
@@ -43,10 +43,7 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 	if err := b.Setup(ctx, conf); err != nil {
 		return nil, err
 	}
-
-	// Start token rotation goroutine with a cancellable context
 	go b.startTokenRotation(ctx, conf.StorageView)
-
 	return b, nil
 }
 
@@ -74,12 +71,10 @@ func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 	return backend
 }
 
-// Cleanup closes the stop channel to terminate the rotation goroutine
 func (b *DatabricksBackend) Cleanup(ctx context.Context) {
 	close(b.stopCh)
 }
 
-// startTokenRotation runs a background process to check and rotate tokens
 func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logical.Storage) {
 	ticker := time.NewTicker(tokenCheckInterval)
 	defer ticker.Stop()
@@ -93,7 +88,6 @@ func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logi
 			b.Logger().Info("Token rotation stopped due to backend cleanup")
 			return
 		case <-ticker.C:
-			// Check context before proceeding
 			if ctx.Err() != nil {
 				b.Logger().Info("Skipping token rotation due to canceled context")
 				return
@@ -103,12 +97,10 @@ func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logi
 	}
 }
 
-// rotateExpiredTokens checks all stored tokens and rotates expired ones
 func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage logical.Storage) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
-	// Check context before listing configs
 	if ctx.Err() != nil {
 		b.Logger().Info("Skipping config listing due to canceled context")
 		return
@@ -116,7 +108,6 @@ func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage log
 
 	configs, err := storage.List(ctx, "config/")
 	if err != nil {
-		// Log the error but check if it's due to context cancellation
 		if ctx.Err() != nil {
 			b.Logger().Info("Failed to list configs for rotation due to context cancellation", "error", err)
 		} else {
@@ -126,7 +117,6 @@ func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage log
 	}
 
 	for _, config := range configs {
-		// Check context before listing tokens
 		if ctx.Err() != nil {
 			b.Logger().Info("Skipping token listing due to canceled context")
 			return
@@ -142,8 +132,9 @@ func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage log
 			continue
 		}
 
-		for _, tokenID := range tokens {
-			b.checkAndRotateToken(ctx, storage, config, tokenID)
+		// Change tokenID to tokenName since we’re now listing by name
+		for _, tokenName := range tokens {
+			b.checkAndRotateToken(ctx, storage, config, tokenName)
 		}
 	}
 }
