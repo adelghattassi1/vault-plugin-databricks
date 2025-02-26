@@ -83,7 +83,11 @@ func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 
 func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	configName := d.Get("config_name").(string)
-	tokenName := d.Get("token_name").(string)
+	tokenName, ok := d.GetOk("token_name")
+	if !ok || tokenName == "" {
+		return nil, fmt.Errorf("token_name is required")
+	}
+	tokenNameStr := tokenName.(string)
 	applicationID := d.Get("application_id").(string)
 	lifetimeSeconds := d.Get("lifetime_seconds").(int)
 	comment := d.Get("comment").(string)
@@ -120,13 +124,13 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	b.lock.Unlock()
 
 	// Check if token_name already exists
-	storagePath := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenName)
+	storagePath := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenNameStr)
 	existingEntry, err := req.Storage.Get(ctx, storagePath)
 	if err != nil {
 		return nil, fmt.Errorf("error checking existing token: %v", err)
 	}
 	if existingEntry != nil {
-		return nil, fmt.Errorf("token with name %s already exists in configuration %s", tokenName, configName)
+		return nil, fmt.Errorf("token with name %s already exists in configuration %s", tokenNameStr, configName)
 	}
 
 	token, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
@@ -140,7 +144,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 
 	tokenEntry := TokenStorageEntry{
-		TokenName:       tokenName, // Set TokenName
+		TokenName:       tokenNameStr, // Set TokenName
 		TokenID:         token.TokenInfo.TokenId,
 		TokenValue:      token.TokenValue,
 		ApplicationID:   applicationID,
@@ -164,7 +168,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to store token: %v", err)
 	}
 
-	b.Logger().Info("Token created successfully", "token_name", tokenName)
+	b.Logger().Info("Token created successfully", "token_name", tokenNameStr)
 	return &logical.Response{
 		Data: tokenDetail(&tokenEntry),
 	}, nil
@@ -263,10 +267,12 @@ func pathReadDeleteToken(b *DatabricksBackend) []*framework.Path {
 				"config_name": {
 					Type:        framework.TypeString,
 					Description: "The name of the configuration under which the token is stored.",
+					Required:    true,
 				},
 				"token_name": { // Changed from token_id
 					Type:        framework.TypeString,
 					Description: "The name of the token to read or delete.",
+					Required:    true,
 				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
@@ -349,7 +355,7 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 func pathListTokens(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: "tokens/(?P<config_name>[^/]+)",
+			Pattern: fmt.Sprintf("tokens/%s?/?", framework.GenericNameRegex("config_name")),
 			Fields: map[string]*framework.FieldSchema{
 				"config_name": {
 					Type:        framework.TypeString,

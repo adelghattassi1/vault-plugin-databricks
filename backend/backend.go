@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	tokenCheckInterval  = 5 * time.Minute
-	rotationGracePeriod = 1 * time.Minute
+	tokenCheckInterval  = 2 * time.Minute
+	rotationGracePeriod = 5 * time.Minute
 )
 
 type DatabricksBackend struct {
