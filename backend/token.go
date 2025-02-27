@@ -41,10 +41,6 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 					Type:        framework.TypeString,
 					Description: "Comment that describes the purpose of the token.",
 				},
-				"kv_path": {
-					Type:        framework.TypeString,
-					Description: "Optional path in the KVv2 'gtn' mount to store the token (e.g., 'databricks/tokens/mytoken'). If omitted, token is not stored in KVv2.",
-				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
@@ -95,13 +91,11 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	applicationID := d.Get("application_id").(string)
 	lifetimeSeconds := d.Get("lifetime_seconds").(int)
 	comment := d.Get("comment").(string)
-	kvPath, kvPathProvided := d.GetOk("kv_path")
 
 	if lifetimeSeconds < 60 || lifetimeSeconds > 7776000 {
 		return nil, fmt.Errorf("lifetime_seconds must be between 60 and 7776000")
 	}
 
-	// Retrieve Databricks config
 	configEntry, err := req.Storage.Get(ctx, "config/"+configName)
 	if err != nil {
 		b.Logger().Error("Failed to retrieve configuration", "error", err)
@@ -116,7 +110,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
-	// Create Databricks client
 	client, err := databricks.NewWorkspaceClient(&databricks.Config{
 		Host:  config.BaseURL,
 		Token: config.Token,
@@ -130,7 +123,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	b.clients[configName] = client
 	b.lock.Unlock()
 
-	// Check if token_name already exists in backend storage
+	// Check if token_name already exists
 	storagePath := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenNameStr)
 	existingEntry, err := req.Storage.Get(ctx, storagePath)
 	if err != nil {
@@ -140,7 +133,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("token with name %s already exists in configuration %s", tokenNameStr, configName)
 	}
 
-	// Create token in Databricks
 	token, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
 		ApplicationId:   applicationID,
 		Comment:         comment,
@@ -151,7 +143,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to create token: %v", err)
 	}
 
-	// Build token entry for backend storage
 	tokenEntry := TokenStorageEntry{
 		TokenName:       tokenNameStr,
 		TokenID:         token.TokenInfo.TokenId,
@@ -166,7 +157,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		RotationEnabled: true,
 	}
 
-	// Store in backend storage
+	// Use token_name in the storage path instead of token_id
 	storageEntry, err := logical.StorageEntryJSON(storagePath, tokenEntry)
 	if err != nil {
 		b.Logger().Error("Failed to create storage entry", "error", err)
@@ -177,39 +168,12 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to store token: %v", err)
 	}
 
-	// If kv_path is provided, store in KVv2 mount "gtn" using Vault API
-	if kvPathProvided {
-		if b.vaultClient == nil {
-			b.Logger().Error("Vault client not initialized; cannot write to 'gtn' KVv2 mount")
-			return nil, fmt.Errorf("Vault client not configured; cannot store token in 'gtn'")
-		}
-
-		kvFullPath := kvPath.(string) // KVv2 client uses path without "gtn/data/" prefix
-		b.Logger().Info("Storing token in KVv2 mount 'gtn'", "path", kvFullPath)
-
-		kvData := map[string]interface{}{
-			"token_value":    token.TokenValue,
-			"token_id":       token.TokenInfo.TokenId,
-			"creation_time":  time.UnixMilli(token.TokenInfo.CreationTime).Format(time.RFC3339),
-			"expiry_time":    time.UnixMilli(token.TokenInfo.ExpiryTime).Format(time.RFC3339),
-			"application_id": applicationID,
-			"lifetime":       int64(lifetimeSeconds),
-			"comment":        comment,
-		}
-
-		err, _ := b.vaultClient.KVv2("gtn").Put(ctx, kvFullPath, kvData)
-		if err != nil {
-			b.Logger().Error("Failed to store token in 'gtn' KVv2 mount", "path", kvFullPath, "error", err)
-		} else {
-			b.Logger().Info("Successfully stored token in 'gtn' KVv2 mount", "path", kvFullPath)
-		}
-	}
-
 	b.Logger().Info("Token created successfully", "token_name", tokenNameStr)
 	return &logical.Response{
 		Data: tokenDetail(&tokenEntry),
 	}, nil
 }
+
 func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage logical.Storage, configName, tokenName string) {
 	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenName)
 	b.Logger().Debug("Checking token for rotation", "path", path)
@@ -557,7 +521,7 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	token.ExpiryTime = time.UnixMilli(newToken.TokenInfo.ExpiryTime)
 	token.LastRotated = time.Now()
 	token.RotationEnabled = rotationEnabled
-	// Note: TokenName and Configuration remain unchanged since they’re identifiers
+	// Note: TokenName and Configuration remain unchanged since their identifiers
 
 	b.Logger().Info("Updated token fields", "token_name", tokenNameStr, "token_id", token.TokenID, "comment", token.Comment, "rotation_enabled", token.RotationEnabled)
 
