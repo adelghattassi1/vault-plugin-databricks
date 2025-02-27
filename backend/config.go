@@ -3,17 +3,10 @@ package backend
 import (
 	"context"
 	"github.com/hashicorp/vault/sdk/framework"
-	"time"
-
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
 // ConfigStorageEntry structure represents the config as it is stored within vault
-type ConfigStorageEntry struct {
-	BaseURL string        `json:"base_url" structs:"base_url" mapstructure:"base_url"`
-	Token   string        `json:"token" structs:"token" mapstructure:"token"`
-	MaxTTL  time.Duration `json:"max_ttl" structs:"max_ttl" mapstructure:"max_ttl"`
-}
 
 func getConfig(ctx context.Context, s logical.Storage, data *framework.FieldData) (*ConfigStorageEntry, error) {
 	name := data.Get("name").(string)

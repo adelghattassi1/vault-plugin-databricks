@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/databricks/databricks-sdk-go"
@@ -52,7 +55,7 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 }
 
 type TokenStorageEntry struct {
-	TokenName       string        `json:"token_name"` // Added TokenName
+	TokenName       string        `json:"token_name"`
 	TokenID         string        `json:"token_id"`
 	TokenValue      string        `json:"token_value"`
 	ApplicationID   string        `json:"application_id"`
@@ -65,9 +68,52 @@ type TokenStorageEntry struct {
 	RotationEnabled bool          `json:"rotation_enabled"`
 }
 
+type ConfigStorageEntry struct {
+	BaseURL      string `json:"base_url"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
+// getDatabricksAccessToken fetches an access token using OAuth client credentials
+func getDatabricksAccessToken(baseURL, clientID, clientSecret string) (string, error) {
+	tokenURL := fmt.Sprintf("%s/oidc/v1/token", baseURL)
+	data := url.Values{
+		"grant_type": {"client_credentials"},
+		"scope":      {"all-apis"},
+	}
+
+	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("failed to create token request: %v", err)
+	}
+
+	req.SetBasicAuth(clientID, clientSecret)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to request access token: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("token request failed with status: %d", resp.StatusCode)
+	}
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", fmt.Errorf("failed to decode token response: %v", err)
+	}
+
+	return tokenResp.AccessToken, nil
+}
+
 func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 	return map[string]interface{}{
-		"token_name":       token.TokenName, // Added token_name
+		"token_name":       token.TokenName,
 		"token_id":         token.TokenID,
 		"token_value":      token.TokenValue,
 		"application_id":   token.ApplicationID,
@@ -110,9 +156,17 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
+	// Fetch Databricks access token
+	accessToken, err := getDatabricksAccessToken(config.BaseURL, config.ClientID, config.ClientSecret)
+	if err != nil {
+		b.Logger().Error("Failed to fetch Databricks access token", "error", err)
+		return nil, fmt.Errorf("failed to fetch access token: %v", err)
+	}
+
+	// Create Databricks client with the access token
 	client, err := databricks.NewWorkspaceClient(&databricks.Config{
 		Host:  config.BaseURL,
-		Token: config.Token,
+		Token: accessToken,
 	})
 	if err != nil {
 		b.Logger().Error("Failed to create Databricks client", "error", err)
@@ -123,7 +177,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	b.clients[configName] = client
 	b.lock.Unlock()
 
-	// Check if token_name already exists
 	storagePath := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenNameStr)
 	existingEntry, err := req.Storage.Get(ctx, storagePath)
 	if err != nil {
@@ -139,8 +192,8 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		LifetimeSeconds: int64(lifetimeSeconds),
 	})
 	if err != nil {
-		b.Logger().Error("Failed to create token", "error", err)
-		return nil, fmt.Errorf("failed to create token: %v", err)
+		b.Logger().Error("Failed to create OBO token", "error", err)
+		return nil, fmt.Errorf("failed to create OBO token: %v", err)
 	}
 
 	tokenEntry := TokenStorageEntry{
@@ -157,7 +210,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		RotationEnabled: true,
 	}
 
-	// Use token_name in the storage path instead of token_id
 	storageEntry, err := logical.StorageEntryJSON(storagePath, tokenEntry)
 	if err != nil {
 		b.Logger().Error("Failed to create storage entry", "error", err)
@@ -178,7 +230,6 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenName)
 	b.Logger().Debug("Checking token for rotation", "path", path)
 
-	// Retrieve token
 	entry, err := storage.Get(ctx, path)
 	if err != nil {
 		b.Logger().Error("Failed to retrieve token for rotation", "path", path, "error", err)
@@ -195,7 +246,6 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		return
 	}
 
-	// Check if rotation is needed
 	now := time.Now()
 	rotationThreshold := token.ExpiryTime.Add(-rotationGracePeriod)
 	if !token.RotationEnabled || now.Before(rotationThreshold) {
@@ -205,7 +255,6 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 
 	b.Logger().Info("Rotating token", "token_name", tokenName, "token_id", token.TokenID)
 
-	// Get config for Databricks client
 	configEntry, err := storage.Get(ctx, "config/"+configName)
 	if err != nil || configEntry == nil {
 		b.Logger().Error("Failed to retrieve config for rotation", "config", configName, "error", err)
@@ -218,13 +267,19 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		return
 	}
 
+	accessToken, err := getDatabricksAccessToken(config.BaseURL, config.ClientID, config.ClientSecret)
+	if err != nil {
+		b.Logger().Error("Failed to fetch Databricks access token for rotation", "error", err)
+		return
+	}
+
 	b.lock.RLock()
 	client, exists := b.clients[configName]
 	b.lock.RUnlock()
 	if !exists || client == nil {
 		client, err = databricks.NewWorkspaceClient(&databricks.Config{
 			Host:  config.BaseURL,
-			Token: config.Token,
+			Token: accessToken,
 		})
 		if err != nil {
 			b.Logger().Error("Failed to create Databricks client for rotation", "config", configName, "error", err)
@@ -263,11 +318,9 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		return
 	}
 
-	// Revoke the old token
 	err = client.TokenManagement.DeleteByTokenId(ctx, oldTokenID)
 	if err != nil {
 		b.Logger().Warn("Failed to revoke old token after rotation", "token_name", tokenName, "old_token_id", oldTokenID, "error", err)
-		// Continue since the new token is already stored
 	}
 
 	b.Logger().Info("Successfully rotated token", "token_name", tokenName, "new_token_id", token.TokenID)
@@ -316,13 +369,14 @@ func pathTokenOperations(b *DatabricksBackend) []*framework.Path {
 		},
 	}
 }
+
 func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	configName, ok := d.GetOk("config_name")
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
 	}
 
-	tokenName, ok := d.GetOk("token_name") // Changed from token_id
+	tokenName, ok := d.GetOk("token_name")
 	if !ok {
 		return nil, fmt.Errorf("token_name not provided")
 	}
@@ -351,7 +405,7 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("config_name not provided")
 	}
 
-	tokenName, ok := d.GetOk("token_name") // Changed from token_id
+	tokenName, ok := d.GetOk("token_name")
 	if !ok {
 		return nil, fmt.Errorf("token_name not provided")
 	}
@@ -401,19 +455,16 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 }
 
 func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	// Extract the config_name field from the request data
 	configName, ok := d.GetOk("config_name")
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
 	}
 
-	// List tokens from storage
 	tokens, err := req.Storage.List(ctx, fmt.Sprintf("%s/%s/", pathPatternToken, configName))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens: %v", err)
 	}
 
-	// Return a successful response with the token list
 	return &logical.Response{
 		Data: map[string]interface{}{
 			"keys": tokens,
@@ -437,7 +488,6 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configNameStr, tokenNameStr)
 	b.Logger().Info("Updating token", "path", path)
 
-	// Retrieve existing token from storage
 	entry, err := req.Storage.Get(ctx, path)
 	if err != nil || entry == nil {
 		b.Logger().Error("Token not found", "path", path, "error", err)
@@ -450,25 +500,30 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to parse token data: %v", err)
 	}
 
-	// Get Databricks client
+	configEntry, err := req.Storage.Get(ctx, "config/"+configNameStr)
+	if err != nil || configEntry == nil {
+		b.Logger().Error("Failed to retrieve config for update", "config", configNameStr, "error", err)
+		return nil, fmt.Errorf("configuration not found: %s", configNameStr)
+	}
+	var config ConfigStorageEntry
+	if err := configEntry.DecodeJSON(&config); err != nil {
+		b.Logger().Error("Failed to decode config", "config", configNameStr, "error", err)
+		return nil, fmt.Errorf("error decoding configuration: %v", err)
+	}
+
+	accessToken, err := getDatabricksAccessToken(config.BaseURL, config.ClientID, config.ClientSecret)
+	if err != nil {
+		b.Logger().Error("Failed to fetch Databricks access token for update", "error", err)
+		return nil, fmt.Errorf("failed to fetch access token: %v", err)
+	}
+
 	b.lock.RLock()
 	client, exists := b.clients[configNameStr]
 	b.lock.RUnlock()
 	if !exists || client == nil {
-		// Fetch config to create a new client if needed
-		configEntry, err := req.Storage.Get(ctx, "config/"+configNameStr)
-		if err != nil || configEntry == nil {
-			b.Logger().Error("Failed to retrieve config for client", "config", configNameStr, "error", err)
-			return nil, fmt.Errorf("configuration not found: %s", configNameStr)
-		}
-		var config ConfigStorageEntry
-		if err := configEntry.DecodeJSON(&config); err != nil {
-			b.Logger().Error("Failed to decode config", "config", configNameStr, "error", err)
-			return nil, fmt.Errorf("error decoding configuration: %v", err)
-		}
 		client, err = databricks.NewWorkspaceClient(&databricks.Config{
 			Host:  config.BaseURL,
-			Token: config.Token,
+			Token: accessToken,
 		})
 		if err != nil {
 			b.Logger().Error("Failed to create Databricks client", "config", configNameStr, "error", err)
@@ -479,12 +534,11 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 		b.lock.Unlock()
 	}
 
-	// Prepare parameters for new token, preserving existing values unless overridden
 	comment := token.Comment
 	if newComment, ok := d.GetOk("comment"); ok {
 		comment = newComment.(string)
 	}
-	lifetimeSeconds := int64(token.Lifetime / time.Second) // Default to existing lifetime
+	lifetimeSeconds := int64(token.Lifetime / time.Second)
 	if newLifetime, ok := d.GetOk("lifetime_seconds"); ok {
 		lifetimeSeconds = int64(newLifetime.(int))
 	}
@@ -493,17 +547,14 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 		rotationEnabled = newRotationEnabled.(bool)
 	}
 
-	// Delete the old token from Databricks
 	oldTokenID := token.TokenID
 	err = client.TokenManagement.DeleteByTokenId(ctx, oldTokenID)
 	if err != nil {
 		b.Logger().Warn("Failed to delete old token during update", "token_name", tokenNameStr, "token_id", oldTokenID, "error", err)
-		// Proceed anyway since we’ll replace it
 	}
 
-	// Create a new token in Databricks
 	newToken, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
-		ApplicationId:   token.ApplicationID, // Preserve original application ID
+		ApplicationId:   token.ApplicationID,
 		Comment:         comment,
 		LifetimeSeconds: lifetimeSeconds,
 	})
@@ -512,7 +563,6 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to create new token: %v", err)
 	}
 
-	// Update token entry with new Databricks token details
 	token.TokenID = newToken.TokenInfo.TokenId
 	token.TokenValue = newToken.TokenValue
 	token.Comment = comment
@@ -521,11 +571,9 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	token.ExpiryTime = time.UnixMilli(newToken.TokenInfo.ExpiryTime)
 	token.LastRotated = time.Now()
 	token.RotationEnabled = rotationEnabled
-	// Note: TokenName and Configuration remain unchanged since their identifiers
 
 	b.Logger().Info("Updated token fields", "token_name", tokenNameStr, "token_id", token.TokenID, "comment", token.Comment, "rotation_enabled", token.RotationEnabled)
 
-	// Persist the updated token
 	newEntry, err := logical.StorageEntryJSON(path, token)
 	if err != nil {
 		b.Logger().Error("Failed to create storage entry", "path", path, "error", err)

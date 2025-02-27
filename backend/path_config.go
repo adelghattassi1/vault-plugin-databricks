@@ -3,8 +3,6 @@ package backend
 import (
 	"context"
 	"fmt"
-	"time"
-
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 )
@@ -18,77 +16,59 @@ func LT24HourTTLWarning(s string) string {
 }
 
 func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	// List all keys at the root level where configurations are stored
 	configs, err := req.Storage.List(ctx, "config/")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list config entries: %v", err)
 	}
 
-	// Prepare the response data
 	responseData := map[string]interface{}{
 		"config_entries": configs,
 	}
 
-	// Return the response with the list of configuration entries
 	return &logical.Response{
 		Data: responseData,
 	}, nil
 }
 
-// schema for the configuring Gitlab token plugin, this will map the fields coming in from the
-// vault request field map
+// schema for configuring the Databricks token plugin
 var configSchema = map[string]*framework.FieldSchema{
 	"name": {
 		Type:        framework.TypeString,
-		Description: `The name of the configuration.`,
+		Description: "The name of the configuration.",
 		Required:    true,
 	},
 	"base_url": {
 		Type:        framework.TypeString,
-		Description: `databricks base url`,
+		Description: "Databricks base URL (e.g., https://<workspace-id>.cloud.databricks.com)",
 		Default:     "https://databricks.cloud.com",
 	},
-	"token": {
+	"client_id": {
 		Type:        framework.TypeString,
-		Description: `databricks token that has permissions to generate on behalf of access tokens`,
+		Description: "Databricks OAuth client ID for M2M authentication",
+		Required:    true,
 	},
-	"max_ttl": {
-		Type:        framework.TypeDurationSecond,
-		Description: `Maximum lifetime a generated token will be valid for. If <= 0, will use system default(0, never expire)`,
-		Default:     0,
+	"client_secret": {
+		Type:        framework.TypeString,
+		Description: "Databricks OAuth client secret for M2M authentication",
+		Required:    true,
 	},
 }
 
 func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 	return map[string]interface{}{
-		"base_url": config.BaseURL,
-		"max_ttl":  int64(config.MaxTTL / time.Second),
+		"base_url":      config.BaseURL,
+		"client_id":     config.ClientID,
+		"client_secret": "********", // Masked for security
 	}
 }
 
 func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	// Get the config name from the input
 	name, ok := d.GetOk("name")
 	if !ok {
 		return nil, fmt.Errorf("name not provided")
 	}
 
-	// Construct the keys for the configuration and its associated tokens
 	configKey := fmt.Sprintf("config/%s", name.(string))
-	//tokensKey := fmt.Sprintf("tokens/%s", name.(string))
-	//
-	//// List the tokens associated with this configuration
-	//tokens, err := req.Storage.List(ctx, tokensKey)
-	//if err != nil {
-	//	return nil, fmt.Errorf("failed to list tokens for configuration: %v", err)
-	//}
-	//
-	//for _, token := range tokens {
-	//	tokenKey := fmt.Sprintf("%s/%s", tokensKey, token)
-	//	if err := req.Storage.Delete(ctx, tokenKey); err != nil {
-	//		return nil, fmt.Errorf("failed to delete token %s: %v", token, err)
-	//	}
-	//}
 
 	if err := req.Storage.Delete(ctx, configKey); err != nil {
 		return nil, fmt.Errorf("failed to delete configuration: %v", err)
@@ -133,31 +113,19 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 		config.BaseURL = configSchema["base_url"].Default.(string)
 	}
 
-	if token, ok := data.GetOk("token"); ok {
-		config.Token = token.(string)
+	clientID, ok := data.GetOk("client_id")
+	if ok {
+		config.ClientID = clientID.(string)
+	} else if config.ClientID == "" {
+		return nil, fmt.Errorf("client_id is required")
 	}
 
-	maxTTLRaw, ok := data.GetOk("max_ttl")
-	if ok && maxTTLRaw.(int) > 0 {
-		// Until Gitlab implements granular token expiry.
-		// bounce anything less than 24 hours
-		if maxTTLRaw.(int) < (24 * 3600) {
-			warnings = append(warnings, LT24HourTTLWarning("max_ttl"))
-		} else {
-			config.MaxTTL = time.Duration(maxTTLRaw.(int)) * time.Second
-		}
+	clientSecret, ok := data.GetOk("client_secret")
+	if ok {
+		config.ClientSecret = clientSecret.(string)
+	} else if config.ClientSecret == "" {
+		return nil, fmt.Errorf("client_secret is required")
 	}
-
-	if config.MaxTTL == 0 {
-		warnings = append(warnings, NoTTLWarning("max_ttl"))
-	}
-
-	// maxTTLRaw, ok := data.GetOk("max_ttl")
-	// if ok && maxTTLRaw.(int) > 0 {
-	// 	config.MaxTTL = time.Duration(maxTTLRaw.(int)) * time.Second
-	// } else if config.MaxTTL == time.Duration(0) {
-	// 	config.MaxTTL = time.Duration(configSchema["max_ttl"].Default.(int)) * time.Second
-	// }
 
 	entry, err := logical.StorageEntryJSON("config/"+nameStr, config)
 	if err != nil {
@@ -179,7 +147,6 @@ func pathConfig(b *DatabricksBackend) []*framework.Path {
 		{
 			Pattern: "config/(?P<name>.+)",
 			Fields:  configSchema,
-
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
 					Callback: b.pathConfigRead,
@@ -192,12 +159,10 @@ func pathConfig(b *DatabricksBackend) []*framework.Path {
 					Callback: b.handleDeleteConfig,
 				},
 			},
-
 			HelpSynopsis:    pathConfigHelpSyn,
 			HelpDescription: pathConfigHelpDesc,
 		},
 	}
-
 	return paths
 }
 
@@ -211,12 +176,10 @@ func pathConfigList(b *DatabricksBackend) []*framework.Path {
 					Callback: b.listConfigEntries,
 				},
 			},
-
 			HelpSynopsis:    pathConfigHelpSyn,
 			HelpDescription: pathConfigHelpDesc,
 		},
 	}
-
 	return paths
 }
 
@@ -225,18 +188,17 @@ Configure the Databricks backend.
 `
 
 const pathConfigHelpDesc = `
-The Databricks backend requires credentials for creating a project access token.
-This endpoint is used to configure those credentials as well as default values
-for the backend in general.
+The Databricks backend requires OAuth credentials (client_id and client_secret) for creating access tokens via M2M authentication.
+This endpoint is used to configure those credentials as well as default values for the backend in general.
 `
 
 var configExamples = []framework.RequestExample{
 	{
 		Description: "Create/update backend configuration",
 		Data: map[string]interface{}{
-			"base_url": "https://my.Databricks.com",
-			"token":    "MyPersonalAccessToken",
-			"max_ttl":  "168h",
+			"base_url":      "https://my-databricks-workspace.cloud.databricks.com",
+			"client_id":     "my-client-id",
+			"client_secret": "my-client-secret",
 		},
 	},
 }
