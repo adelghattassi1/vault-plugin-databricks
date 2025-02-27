@@ -25,14 +25,15 @@ type CachedToken struct {
 }
 type DatabricksBackend struct {
 	*framework.Backend
-	client    *http.Client
-	clients   map[string]*databricks.WorkspaceClient
-	view      logical.Storage
-	lock      sync.RWMutex
-	roleLocks []*locksutil.LockEntry
-	stopCh    chan struct{}
-	ctx       context.Context    // New context for the backend's lifetime
-	cancel    context.CancelFunc // Function to cancel the context
+	client       *http.Client
+	clients      map[string]*databricks.WorkspaceClient
+	accessTokens map[string]CachedToken
+	view         logical.Storage
+	lock         sync.RWMutex
+	roleLocks    []*locksutil.LockEntry
+	stopCh       chan struct{}
+	ctx          context.Context    // New context for the backend's lifetime
+	cancel       context.CancelFunc // Function to cancel the context
 }
 
 func (b *DatabricksBackend) getClient() *http.Client {
@@ -56,12 +57,13 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 	ctx, cancel := context.WithCancel(context.Background()) // Create a long-lived context
 	backend := &DatabricksBackend{
-		view:      conf.StorageView,
-		clients:   make(map[string]*databricks.WorkspaceClient),
-		roleLocks: locksutil.CreateLocks(),
-		stopCh:    make(chan struct{}),
-		ctx:       ctx,    // Assign the context
-		cancel:    cancel, // Assign the cancel function
+		view:         conf.StorageView,
+		clients:      make(map[string]*databricks.WorkspaceClient),
+		roleLocks:    locksutil.CreateLocks(),
+		accessTokens: make(map[string]CachedToken),
+		stopCh:       make(chan struct{}),
+		ctx:          ctx,    // Assign the context
+		cancel:       cancel, // Assign the cancel function
 	}
 	backend.Backend = &framework.Backend{
 		BackendType: logical.TypeLogical,
