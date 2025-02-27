@@ -88,12 +88,12 @@ func (b *DatabricksBackend) getDatabricksAccessToken(config ConfigStorageEntry) 
 	// Add a 5-minute buffer to refresh the token before it expires
 	buffer := 5 * time.Minute
 	if exists && now.Before(cached.ExpiresAt.Add(-buffer)) {
-		b.Logger().Debug("Using cached access token", "base_url", config.BaseURL, "expires_at", cached.ExpiresAt)
+		b.Logger().Info("Using cached access token", "base_url", config.BaseURL, "expires_at", cached.ExpiresAt)
 		return cached.AccessToken, nil
 	}
 
 	// Fetch a new token if no valid cached token exists
-	b.Logger().Debug("Fetching new access token", "base_url", config.BaseURL, "reason", "token expired or not cached")
+	b.Logger().Info("Fetching new access token", "base_url", config.BaseURL, "reason", "token expired or not cached")
 	tokenURL := fmt.Sprintf("%s/oidc/v1/token", config.BaseURL)
 	data := url.Values{
 		"grant_type": {"client_credentials"},
@@ -288,19 +288,19 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 
 	configEntry, err := storage.Get(ctx, "config/"+configName)
 	if err != nil || configEntry == nil {
-		b.Logger().Error("Failed to retrieve config for rotation", "config", configName, "error", err)
+		b.Logger().Info("Failed to retrieve config for rotation", "config", configName, "error", err)
 		return
 	}
 
 	var config ConfigStorageEntry
 	if err := configEntry.DecodeJSON(&config); err != nil {
-		b.Logger().Error("Failed to decode config for rotation", "config", configName, "error", err)
+		b.Logger().Info("Failed to decode config for rotation", "config", configName, "error", err)
 		return
 	}
 
 	accessToken, err := b.getDatabricksAccessToken(config)
 	if err != nil {
-		b.Logger().Error("Failed to fetch Databricks access token for rotation", "error", err)
+		b.Logger().Info("Failed to fetch Databricks access token for rotation", "error", err)
 		return
 	}
 
@@ -313,7 +313,7 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 			Token: accessToken,
 		})
 		if err != nil {
-			b.Logger().Error("Failed to create Databricks client for rotation", "config", configName, "error", err)
+			b.Logger().Info("Failed to create Databricks client for rotation", "config", configName, "error", err)
 			return
 		}
 		b.lock.Lock()
@@ -327,7 +327,7 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		LifetimeSeconds: int64(token.Lifetime / time.Second),
 	})
 	if err != nil {
-		b.Logger().Error("Failed to create new token during rotation", "token_name", tokenName, "error", err)
+		b.Logger().Info("Failed to create new token during rotation", "token_name", tokenName, "error", err)
 		return
 	}
 
@@ -340,17 +340,17 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 
 	newEntry, err := logical.StorageEntryJSON(path, token)
 	if err != nil {
-		b.Logger().Error("Failed to create storage entry for rotated token", "token_name", tokenName, "error", err)
+		b.Logger().Info("Failed to create storage entry for rotated token", "token_name", tokenName, "error", err)
 		return
 	}
 	if err := storage.Put(ctx, newEntry); err != nil {
-		b.Logger().Error("Failed to store rotated token", "token_name", tokenName, "error", err)
+		b.Logger().Info("Failed to store rotated token", "token_name", tokenName, "error", err)
 		return
 	}
 
 	err = client.TokenManagement.DeleteByTokenId(ctx, oldTokenID)
 	if err != nil {
-		b.Logger().Warn("Failed to revoke old token after rotation", "token_name", tokenName, "old_token_id", oldTokenID, "error", err)
+		b.Logger().Info("Failed to revoke old token after rotation", "token_name", tokenName, "old_token_id", oldTokenID, "error", err)
 	}
 
 	b.Logger().Info("Successfully rotated token", "token_name", tokenName, "new_token_id", token.TokenID)
