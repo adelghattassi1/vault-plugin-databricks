@@ -7,14 +7,6 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
-func NoTTLWarning(s string) string {
-	return fmt.Sprintf("%s is not set. Token can be generated with expiration 'never'", s)
-}
-
-func LT24HourTTLWarning(s string) string {
-	return fmt.Sprintf("%[1]s is set with less than 24 hours. With current token expiry limitation, this %[1]s is ignored", s)
-}
-
 func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	configs, err := req.Storage.List(ctx, "config/")
 	if err != nil {
