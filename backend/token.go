@@ -175,42 +175,59 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 }
 
 func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage logical.Storage, configName, tokenName string) {
-	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenName) // Use tokenName
+	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenName)
+	b.Logger().Debug("Checking token for rotation", "path", path)
 
+	// Retrieve token
 	entry, err := storage.Get(ctx, path)
-	if err != nil || entry == nil {
+	if err != nil {
+		b.Logger().Error("Failed to retrieve token for rotation", "path", path, "error", err)
+		return
+	}
+	if entry == nil {
+		b.Logger().Warn("Token not found for rotation", "path", path)
 		return
 	}
 
 	var token TokenStorageEntry
 	if err := json.Unmarshal(entry.Value, &token); err != nil {
-		b.Logger().Error("Failed to unmarshal token", "error", err)
+		b.Logger().Error("Failed to unmarshal token", "path", path, "error", err)
 		return
 	}
 
-	if !token.RotationEnabled || time.Now().Before(token.ExpiryTime.Add(-rotationGracePeriod)) {
+	// Check if rotation is needed
+	now := time.Now()
+	rotationThreshold := token.ExpiryTime.Add(-rotationGracePeriod)
+	if !token.RotationEnabled || now.Before(rotationThreshold) {
+		b.Logger().Debug("Token does not need rotation", "token_name", tokenName, "expiry", token.ExpiryTime, "threshold", rotationThreshold)
 		return
 	}
 
+	b.Logger().Info("Rotating token", "token_name", tokenName, "token_id", token.TokenID)
+
+	// Get config for Databricks client
 	configEntry, err := storage.Get(ctx, "config/"+configName)
 	if err != nil || configEntry == nil {
+		b.Logger().Error("Failed to retrieve config for rotation", "config", configName, "error", err)
 		return
 	}
 
 	var config ConfigStorageEntry
 	if err := configEntry.DecodeJSON(&config); err != nil {
+		b.Logger().Error("Failed to decode config for rotation", "config", configName, "error", err)
 		return
 	}
 
 	b.lock.RLock()
 	client, exists := b.clients[configName]
 	b.lock.RUnlock()
-	if !exists {
+	if !exists || client == nil {
 		client, err = databricks.NewWorkspaceClient(&databricks.Config{
 			Host:  config.BaseURL,
 			Token: config.Token,
 		})
 		if err != nil {
+			b.Logger().Error("Failed to create Databricks client for rotation", "config", configName, "error", err)
 			return
 		}
 		b.lock.Lock()
@@ -218,66 +235,75 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		b.lock.Unlock()
 	}
 
-	// Create new token first
 	newToken, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
 		ApplicationId:   token.ApplicationID,
 		Comment:         token.Comment,
 		LifetimeSeconds: int64(token.Lifetime / time.Second),
 	})
 	if err != nil {
-		b.Logger().Error("Failed to create new token during rotation", "error", err)
+		b.Logger().Error("Failed to create new token during rotation", "token_name", tokenName, "error", err)
 		return
 	}
 
-	// Store the old token ID to revoke later
 	oldTokenID := token.TokenID
 
-	// Update token details with new token info
 	token.TokenID = newToken.TokenInfo.TokenId
 	token.TokenValue = newToken.TokenValue
 	token.CreationTime = time.UnixMilli(newToken.TokenInfo.CreationTime)
 	token.ExpiryTime = time.UnixMilli(newToken.TokenInfo.ExpiryTime)
-	token.LastRotated = time.Now()
+	token.LastRotated = now
 
 	newEntry, err := logical.StorageEntryJSON(path, token)
 	if err != nil {
-		b.Logger().Error("Failed to create storage entry for rotated token", "error", err)
+		b.Logger().Error("Failed to create storage entry for rotated token", "token_name", tokenName, "error", err)
 		return
 	}
 	if err := storage.Put(ctx, newEntry); err != nil {
-		b.Logger().Error("Failed to store rotated token", "error", err)
+		b.Logger().Error("Failed to store rotated token", "token_name", tokenName, "error", err)
 		return
 	}
 
-	// Revoke old token only after new token is successfully stored
+	// Revoke the old token
 	err = client.TokenManagement.DeleteByTokenId(ctx, oldTokenID)
 	if err != nil {
-		b.Logger().Warn("Failed to revoke old token after rotation", "error", err)
-		// Continue since new token is already in place
+		b.Logger().Warn("Failed to revoke old token after rotation", "token_name", tokenName, "old_token_id", oldTokenID, "error", err)
+		// Continue since the new token is already stored
 	}
 
-	b.Logger().Info("Successfully rotated token", "token_name", tokenName)
+	b.Logger().Info("Successfully rotated token", "token_name", tokenName, "new_token_id", token.TokenID)
 }
 
-func pathReadDeleteToken(b *DatabricksBackend) []*framework.Path {
+func pathTokenOperations(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_name>[^/]+)", // Use token_name
+			Pattern: "token/(?P<config_name>[^/]+)/(?P<token_name>[^/]+)",
 			Fields: map[string]*framework.FieldSchema{
 				"config_name": {
 					Type:        framework.TypeString,
 					Description: "The name of the configuration under which the token is stored.",
 					Required:    true,
 				},
-				"token_name": { // Changed from token_id
+				"token_name": {
 					Type:        framework.TypeString,
-					Description: "The name of the token to read or delete.",
+					Description: "The name of the token to read, update, or delete.",
 					Required:    true,
+				},
+				"comment": {
+					Type:        framework.TypeString,
+					Description: "Updated comment for the token (for update operation).",
+				},
+				"rotation_enabled": {
+					Type:        framework.TypeBool,
+					Description: "Enable or disable automatic token rotation (for update operation)",
+					Default:     true,
 				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
 					Callback: b.handleReadToken,
+				},
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.handleUpdateToken,
 				},
 				logical.DeleteOperation: &framework.PathOperation{
 					Callback: b.handleDeleteToken,
@@ -392,57 +418,29 @@ func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.R
 	}, nil
 }
 
-func pathUpdateToken(b *DatabricksBackend) []*framework.Path {
-	return []*framework.Path{
-		{
-			Pattern: fmt.Sprintf("token/%s/%s", framework.GenericNameRegex("config_name"), framework.GenericNameRegex("token_name")),
-			Fields: map[string]*framework.FieldSchema{
-				"config_name": {
-					Type:        framework.TypeString,
-					Description: "The name of the configuration under which the token is stored.",
-				},
-				"token_name": { // Changed from token_id
-					Type:        framework.TypeString,
-					Description: "The name of the token to update.",
-				},
-				"comment": {
-					Type:        framework.TypeString,
-					Description: "Updated comment for the token.",
-				},
-				"rotation_enabled": {
-					Type:        framework.TypeBool,
-					Description: "Enable or disable automatic token rotation",
-					Default:     true,
-				},
-			},
-			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.handleUpdateToken,
-				},
-			},
-		},
-	}
-}
-
 func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	configName, ok := d.GetOk("config_name")
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
 	}
 
-	tokenName, ok := d.GetOk("token_name") // Changed from token_id
+	tokenName, ok := d.GetOk("token_name")
 	if !ok {
 		return nil, fmt.Errorf("token_name not provided")
 	}
 
 	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName.(string), tokenName.(string))
+	b.Logger().Info("Updating token", "path", path)
 	entry, err := req.Storage.Get(ctx, path)
 	if err != nil || entry == nil {
+		b.Logger().Error("Token not found", "path", path, "error", err)
 		return nil, fmt.Errorf("token not found: %s", tokenName.(string))
 	}
+	b.Logger().Info("Raw token data", "value", string(entry.Value))
 
 	var token TokenStorageEntry
 	if err := json.Unmarshal(entry.Value, &token); err != nil {
+		b.Logger().Error("Unmarshal failed", "error", err)
 		return nil, fmt.Errorf("failed to parse token data: %v", err)
 	}
 
@@ -452,6 +450,7 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	if rotationEnabled, ok := d.GetOk("rotation_enabled"); ok {
 		token.RotationEnabled = rotationEnabled.(bool)
 	}
+	b.Logger().Info("Updating fields", "comment", token.Comment, "rotation_enabled", token.RotationEnabled)
 
 	newEntry, err := logical.StorageEntryJSON(path, token)
 	if err != nil {

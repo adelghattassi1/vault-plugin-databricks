@@ -62,9 +62,8 @@ func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 			pathConfig(backend),
 			pathConfigList(backend),
 			pathCreateToken(backend),
-			pathReadDeleteToken(backend),
+			pathTokenOperations(backend),
 			pathListTokens(backend),
-			pathUpdateToken(backend),
 		),
 	}
 
@@ -90,8 +89,9 @@ func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logi
 		case <-ticker.C:
 			if ctx.Err() != nil {
 				b.Logger().Info("Skipping token rotation due to canceled context")
-				return
+				continue
 			}
+			b.Logger().Debug("Starting token rotation check")
 			b.rotateExpiredTokens(ctx, storage)
 		}
 	}
@@ -108,31 +108,22 @@ func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage log
 
 	configs, err := storage.List(ctx, "config/")
 	if err != nil {
-		if ctx.Err() != nil {
-			b.Logger().Info("Failed to list configs for rotation due to context cancellation", "error", err)
-		} else {
-			b.Logger().Error("Failed to list configs for rotation", "error", err)
-		}
+		b.Logger().Error("Failed to list configs for rotation", "error", err)
 		return
 	}
 
 	for _, config := range configs {
 		if ctx.Err() != nil {
 			b.Logger().Info("Skipping token listing due to canceled context")
-			return
+			break
 		}
 
 		tokens, err := storage.List(ctx, fmt.Sprintf("%s/%s/", pathPatternToken, config))
 		if err != nil {
-			if ctx.Err() != nil {
-				b.Logger().Info("Failed to list tokens for rotation due to context cancellation", "error", err)
-			} else {
-				b.Logger().Error("Failed to list tokens for rotation", "error", err)
-			}
+			b.Logger().Error("Failed to list tokens for config", "config", config, "error", err)
 			continue
 		}
 
-		// Change tokenID to tokenName since we’re now listing by name
 		for _, tokenName := range tokens {
 			b.checkAndRotateToken(ctx, storage, config, tokenName)
 		}
