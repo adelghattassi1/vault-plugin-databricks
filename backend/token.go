@@ -74,19 +74,25 @@ type ConfigStorageEntry struct {
 	ClientSecret string `json:"client_secret"`
 }
 
-// getDatabricksAccessToken fetches an access token if not cached or expired
+// getDatabricksAccessToken fetches an access token using OAuth client credentials
 func (b *DatabricksBackend) getDatabricksAccessToken(config ConfigStorageEntry) (string, error) {
+	// Create a unique key for this configuration
+	key := config.BaseURL + config.ClientID
+
+	// Check if a valid cached token exists
 	b.lock.RLock()
-	cached, exists := b.accessTokens[config.BaseURL+config.ClientID] // Unique key per config
+	cached, exists := b.accessTokens[key]
 	b.lock.RUnlock()
 
 	now := time.Now()
-	refreshTime := cached.ExpiresAt.Add(-accessTokenBuffer)
-	if exists && now.Before(refreshTime) {
-		b.Logger().Debug("Using cached access token", "base_url", config.BaseURL, "expires_at", cached.ExpiresAt.Format(time.RFC3339))
-		return cached.Token, nil
+	// Add a 5-minute buffer to refresh the token before it expires
+	buffer := 5 * time.Minute
+	if exists && now.Before(cached.ExpiresAt.Add(-buffer)) {
+		b.Logger().Debug("Using cached access token", "base_url", config.BaseURL, "expires_at", cached.ExpiresAt)
+		return cached.AccessToken, nil
 	}
 
+	// Fetch a new token if no valid cached token exists
 	b.Logger().Debug("Fetching new access token", "base_url", config.BaseURL, "reason", "token expired or not cached")
 	tokenURL := fmt.Sprintf("%s/oidc/v1/token", config.BaseURL)
 	data := url.Values{
@@ -115,17 +121,19 @@ func (b *DatabricksBackend) getDatabricksAccessToken(config ConfigStorageEntry) 
 
 	var tokenResp struct {
 		AccessToken string `json:"access_token"`
-		ExpiresIn   int64  `json:"expires_in"` // Always 3600
+		ExpiresIn   int64  `json:"expires_in"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 		return "", fmt.Errorf("failed to decode token response: %v", err)
 	}
 
-	// Cache the token with fixed 3600s expiration
+	// Calculate expiration time
+	expiresAt := now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	// Cache the new token
 	b.lock.Lock()
-	b.accessTokens[config.BaseURL+config.ClientID] = CachedAccessToken{
-		Token:     tokenResp.AccessToken,
-		ExpiresAt: now.Add(3600 * time.Second), // Hardcode since expires_in is always 3600
+	b.accessTokens[key] = CachedToken{
+		AccessToken: tokenResp.AccessToken,
+		ExpiresAt:   expiresAt,
 	}
 	b.lock.Unlock()
 
@@ -176,13 +184,14 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
-	// Fetch or use cached access token
+	// Fetch Databricks access token using the new method
 	accessToken, err := b.getDatabricksAccessToken(config)
 	if err != nil {
 		b.Logger().Error("Failed to fetch Databricks access token", "error", err)
 		return nil, fmt.Errorf("failed to fetch access token: %v", err)
 	}
 
+	// Rest of the function remains unchanged
 	client, err := databricks.NewWorkspaceClient(&databricks.Config{
 		Host:  config.BaseURL,
 		Token: accessToken,
@@ -244,7 +253,6 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		Data: tokenDetail(&tokenEntry),
 	}, nil
 }
-
 func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage logical.Storage, configName, tokenName string) {
 	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenName)
 	b.Logger().Debug("Checking token for rotation", "path", path)
@@ -344,7 +352,6 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 
 	b.Logger().Info("Successfully rotated token", "token_name", tokenName, "new_token_id", token.TokenID)
 }
-
 func pathTokenOperations(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
@@ -474,6 +481,7 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 }
 
 func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	// Extract the config_name field from the request data
 	configName, ok := d.GetOk("config_name")
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")

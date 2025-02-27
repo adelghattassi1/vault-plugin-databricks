@@ -17,24 +17,21 @@ import (
 const (
 	tokenCheckInterval  = 2 * time.Minute
 	rotationGracePeriod = 5 * time.Minute
-	accessTokenBuffer   = 200 * time.Second // Buffer before expiry to refresh token
 )
 
+type CachedToken struct {
+	AccessToken string
+	ExpiresAt   time.Time
+}
 type DatabricksBackend struct {
 	*framework.Backend
 	client       *http.Client
 	clients      map[string]*databricks.WorkspaceClient
-	accessTokens map[string]CachedAccessToken // Cache for access tokens
+	accessTokens map[string]CachedToken
 	view         logical.Storage
 	lock         sync.RWMutex
 	roleLocks    []*locksutil.LockEntry
 	stopCh       chan struct{}
-}
-
-// CachedAccessToken stores the token and its expiration time
-type CachedAccessToken struct {
-	Token     string
-	ExpiresAt time.Time
 }
 
 func (b *DatabricksBackend) getClient() *http.Client {
@@ -57,12 +54,12 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 
 func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 	backend := &DatabricksBackend{
-		view:      conf.StorageView,
-		clients:   make(map[string]*databricks.WorkspaceClient),
-		roleLocks: locksutil.CreateLocks(),
-		stopCh:    make(chan struct{}),
+		view:         conf.StorageView,
+		clients:      make(map[string]*databricks.WorkspaceClient),
+		accessTokens: make(map[string]CachedToken),
+		roleLocks:    locksutil.CreateLocks(),
+		stopCh:       make(chan struct{}),
 	}
-
 	backend.Backend = &framework.Backend{
 		BackendType: logical.TypeLogical,
 		Help:        strings.TrimSpace(backendHelp),
@@ -74,10 +71,8 @@ func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 			pathListTokens(backend),
 		),
 	}
-
 	return backend
 }
-
 func (b *DatabricksBackend) Cleanup(ctx context.Context) {
 	close(b.stopCh)
 }
