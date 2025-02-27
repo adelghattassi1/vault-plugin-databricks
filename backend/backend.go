@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/databricks/databricks-sdk-go"
+	"github.com/hashicorp/vault/api" // Add Vault API package
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/locksutil"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -21,12 +23,13 @@ const (
 
 type DatabricksBackend struct {
 	*framework.Backend
-	client    *http.Client
-	clients   map[string]*databricks.WorkspaceClient
-	view      logical.Storage
-	lock      sync.RWMutex
-	roleLocks []*locksutil.LockEntry
-	stopCh    chan struct{}
+	client      *http.Client
+	vaultClient *api.Client // Vault API client for cross-mount operations
+	clients     map[string]*databricks.WorkspaceClient
+	view        logical.Storage
+	lock        sync.RWMutex
+	roleLocks   []*locksutil.LockEntry
+	stopCh      chan struct{}
 }
 
 func (b *DatabricksBackend) getClient() *http.Client {
@@ -40,6 +43,31 @@ func (b *DatabricksBackend) getClient() *http.Client {
 
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := Backend(conf)
+
+	// Initialize Vault client from config or environment
+	vaultAddr := conf.Config["vault_addr"]
+	vaultToken := conf.Config["vault_token"]
+	if vaultAddr == "" {
+		vaultAddr = os.Getenv("VAULT_ADDR")
+	}
+	if vaultToken == "" {
+		vaultToken = os.Getenv("VAULT_TOKEN")
+	}
+
+	if vaultAddr != "" && vaultToken != "" {
+		vaultClient, err := api.NewClient(&api.Config{
+			Address: vaultAddr,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Vault client: %v", err)
+		}
+		vaultClient.SetToken(vaultToken)
+		b.vaultClient = vaultClient
+		b.Logger().Info("Vault client initialized", "address", vaultAddr)
+	} else {
+		b.Logger().Warn("Vault client not initialized; vault_addr or vault_token missing")
+	}
+
 	if err := b.Setup(ctx, conf); err != nil {
 		return nil, err
 	}
