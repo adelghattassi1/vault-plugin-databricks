@@ -266,28 +266,25 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		b.Logger().Warn("Token not found for rotation", "path", path)
 		return
 	}
-	b.Logger().Debug("Successfully retrieved token entry", "path", path)
+	b.Logger().Debug("Retrieved token", "path", path)
 
 	var token TokenStorageEntry
 	if err := json.Unmarshal(entry.Value, &token); err != nil {
 		b.Logger().Error("Failed to unmarshal token", "path", path, "error", err)
 		return
 	}
-	b.Logger().Debug("Successfully unmarshaled token", "token_name", tokenName)
+	b.Logger().Debug("Unmarshaled token", "token_name", tokenName)
 
 	now := time.Now()
 	rotationThreshold := token.ExpiryTime.Add(-rotationGracePeriod)
-	b.Logger().Debug("Rotation check values", "rotation_enabled", token.RotationEnabled, "now", now.Format(time.RFC3339), "expiry", token.ExpiryTime.Format(time.RFC3339), "threshold", rotationThreshold.Format(time.RFC3339), "grace_period", rotationGracePeriod)
+	b.Logger().Debug("Rotation check", "token_name", tokenName, "now", now.Format(time.RFC3339), "threshold", rotationThreshold.Format(time.RFC3339), "expiry", token.ExpiryTime.Format(time.RFC3339), "rotation_enabled", token.RotationEnabled)
 
 	if !token.RotationEnabled || now.Before(rotationThreshold) {
-		b.Logger().Debug("Token does not need rotation", "token_name", tokenName, "reason", map[string]interface{}{
-			"rotation_enabled":     token.RotationEnabled,
-			"now_before_threshold": now.Before(rotationThreshold),
-		})
+		b.Logger().Debug("Token does not need rotation", "token_name", tokenName, "rotation_enabled", token.RotationEnabled, "now_before_threshold", now.Before(rotationThreshold))
 		return
 	}
 
-	b.Logger().Info("Rotating token", "token_name", tokenName, "token_id", token.TokenID)
+	b.Logger().Info("Initiating rotation", "token_name", tokenName, "token_id", token.TokenID)
 
 	configEntry, err := storage.Get(ctx, "config/"+configName)
 	if err != nil || configEntry == nil {
@@ -335,7 +332,6 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 	}
 
 	oldTokenID := token.TokenID
-
 	token.TokenID = newToken.TokenInfo.TokenId
 	token.TokenValue = newToken.TokenValue
 	token.CreationTime = time.UnixMilli(newToken.TokenInfo.CreationTime)
