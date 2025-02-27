@@ -25,13 +25,14 @@ type CachedToken struct {
 }
 type DatabricksBackend struct {
 	*framework.Backend
-	client       *http.Client
-	clients      map[string]*databricks.WorkspaceClient
-	accessTokens map[string]CachedToken
-	view         logical.Storage
-	lock         sync.RWMutex
-	roleLocks    []*locksutil.LockEntry
-	stopCh       chan struct{}
+	client    *http.Client
+	clients   map[string]*databricks.WorkspaceClient
+	view      logical.Storage
+	lock      sync.RWMutex
+	roleLocks []*locksutil.LockEntry
+	stopCh    chan struct{}
+	ctx       context.Context    // New context for the backend's lifetime
+	cancel    context.CancelFunc // Function to cancel the context
 }
 
 func (b *DatabricksBackend) getClient() *http.Client {
@@ -48,17 +49,19 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 	if err := b.Setup(ctx, conf); err != nil {
 		return nil, err
 	}
-	go b.startTokenRotation(ctx, conf.StorageView)
+	go b.startTokenRotation(b.ctx, conf.StorageView) // Use b.ctx instead of ctx
 	return b, nil
 }
 
 func Backend(conf *logical.BackendConfig) *DatabricksBackend {
+	ctx, cancel := context.WithCancel(context.Background()) // Create a long-lived context
 	backend := &DatabricksBackend{
-		view:         conf.StorageView,
-		clients:      make(map[string]*databricks.WorkspaceClient),
-		accessTokens: make(map[string]CachedToken),
-		roleLocks:    locksutil.CreateLocks(),
-		stopCh:       make(chan struct{}),
+		view:      conf.StorageView,
+		clients:   make(map[string]*databricks.WorkspaceClient),
+		roleLocks: locksutil.CreateLocks(),
+		stopCh:    make(chan struct{}),
+		ctx:       ctx,    // Assign the context
+		cancel:    cancel, // Assign the cancel function
 	}
 	backend.Backend = &framework.Backend{
 		BackendType: logical.TypeLogical,
@@ -73,9 +76,6 @@ func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 	}
 	return backend
 }
-func (b *DatabricksBackend) Cleanup(ctx context.Context) {
-	close(b.stopCh)
-}
 
 func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logical.Storage) {
 	ticker := time.NewTicker(tokenCheckInterval)
@@ -84,20 +84,17 @@ func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logi
 	for {
 		select {
 		case <-ctx.Done():
-			b.Logger().Info("Token rotation stopped due to context cancellation")
-			return
-		case <-b.stopCh:
-			b.Logger().Info("Token rotation stopped due to backend cleanup")
+			b.Logger().Info("Token rotation stopped")
 			return
 		case <-ticker.C:
-			if ctx.Err() != nil {
-				b.Logger().Info("Skipping token rotation due to canceled context")
-				continue
-			}
 			b.Logger().Debug("Starting token rotation check")
 			b.rotateExpiredTokens(ctx, storage)
 		}
 	}
+}
+
+func (b *DatabricksBackend) Cleanup(ctx context.Context) {
+	b.cancel()
 }
 
 func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage logical.Storage) {
