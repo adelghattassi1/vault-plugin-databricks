@@ -172,7 +172,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 
 	configEntry, err := req.Storage.Get(ctx, "config/"+configName)
 	if err != nil {
-		b.Logger().Error("Failed to retrieve configuration", "error", err)
+		b.Logger().Info("Failed to retrieve configuration", "error", err)
 		return nil, fmt.Errorf("failed to retrieve configuration: %v", err)
 	}
 	if configEntry == nil {
@@ -180,14 +180,14 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 	var config ConfigStorageEntry
 	if err := configEntry.DecodeJSON(&config); err != nil {
-		b.Logger().Error("Failed to decode configuration", "error", err)
+		b.Logger().Info("Failed to decode configuration", "error", err)
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
 	// Fetch Databricks access token using the new method
 	accessToken, err := b.getDatabricksAccessToken(config)
 	if err != nil {
-		b.Logger().Error("Failed to fetch Databricks access token", "error", err)
+		b.Logger().Info("Failed to fetch Databricks access token", "error", err)
 		return nil, fmt.Errorf("failed to fetch access token: %v", err)
 	}
 
@@ -197,7 +197,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		Token: accessToken,
 	})
 	if err != nil {
-		b.Logger().Error("Failed to create Databricks client", "error", err)
+		b.Logger().Info("Failed to create Databricks client", "error", err)
 		return nil, fmt.Errorf("failed to create Databricks client: %v", err)
 	}
 
@@ -220,7 +220,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		LifetimeSeconds: int64(lifetimeSeconds),
 	})
 	if err != nil {
-		b.Logger().Error("Failed to create OBO token", "error", err)
+		b.Logger().Info("Failed to create OBO token", "error", err)
 		return nil, fmt.Errorf("failed to create OBO token: %v", err)
 	}
 
@@ -240,11 +240,11 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 
 	storageEntry, err := logical.StorageEntryJSON(storagePath, tokenEntry)
 	if err != nil {
-		b.Logger().Error("Failed to create storage entry", "error", err)
+		b.Logger().Info("Failed to create storage entry", "error", err)
 		return nil, fmt.Errorf("failed to create storage entry: %v", err)
 	}
 	if err := req.Storage.Put(ctx, storageEntry); err != nil {
-		b.Logger().Error("Failed to store token", "error", err)
+		b.Logger().Info("Failed to store token", "error", err)
 		return nil, fmt.Errorf("failed to store token: %v", err)
 	}
 
@@ -259,7 +259,7 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 
 	entry, err := storage.Get(ctx, path)
 	if err != nil {
-		b.Logger().Error("Failed to retrieve token for rotation", "path", path, "error", err)
+		b.Logger().Info("Failed to retrieve token for rotation", "path", path, "error", err)
 		return
 	}
 	if entry == nil {
@@ -270,7 +270,7 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 
 	var token TokenStorageEntry
 	if err := json.Unmarshal(entry.Value, &token); err != nil {
-		b.Logger().Error("Failed to unmarshal token", "path", path, "error", err)
+		b.Logger().Info("Failed to unmarshal token", "path", path, "error", err)
 		return
 	}
 	b.Logger().Info("Unmarshaled token", "token_name", tokenName)
@@ -520,30 +520,30 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 
 	entry, err := req.Storage.Get(ctx, path)
 	if err != nil || entry == nil {
-		b.Logger().Error("Token not found", "path", path, "error", err)
+		b.Logger().Info("Token not found", "path", path, "error", err)
 		return nil, fmt.Errorf("token not found: %s", tokenNameStr)
 	}
 
 	var token TokenStorageEntry
 	if err := json.Unmarshal(entry.Value, &token); err != nil {
-		b.Logger().Error("Unmarshal failed", "path", path, "error", err)
+		b.Logger().Info("Unmarshal failed", "path", path, "error", err)
 		return nil, fmt.Errorf("failed to parse token data: %v", err)
 	}
 
 	configEntry, err := req.Storage.Get(ctx, "config/"+configNameStr)
 	if err != nil || configEntry == nil {
-		b.Logger().Error("Failed to retrieve config for update", "config", configNameStr, "error", err)
+		b.Logger().Info("Failed to retrieve config for update", "config", configNameStr, "error", err)
 		return nil, fmt.Errorf("configuration not found: %s", configNameStr)
 	}
 	var config ConfigStorageEntry
 	if err := configEntry.DecodeJSON(&config); err != nil {
-		b.Logger().Error("Failed to decode config", "config", configNameStr, "error", err)
+		b.Logger().Info("Failed to decode config", "config", configNameStr, "error", err)
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
 	accessToken, err := b.getDatabricksAccessToken(config)
 	if err != nil {
-		b.Logger().Error("Failed to fetch Databricks access token for update", "error", err)
+		b.Logger().Info("Failed to fetch Databricks access token for update", "error", err)
 		return nil, fmt.Errorf("failed to fetch access token: %v", err)
 	}
 
@@ -556,7 +556,7 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 			Token: accessToken,
 		})
 		if err != nil {
-			b.Logger().Error("Failed to create Databricks client", "config", configNameStr, "error", err)
+			b.Logger().Info("Failed to create Databricks client", "config", configNameStr, "error", err)
 			return nil, fmt.Errorf("failed to create Databricks client: %v", err)
 		}
 		b.lock.Lock()
@@ -589,7 +589,7 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 		LifetimeSeconds: lifetimeSeconds,
 	})
 	if err != nil {
-		b.Logger().Error("Failed to create new token during update", "token_name", tokenNameStr, "error", err)
+		b.Logger().Info("Failed to create new token during update", "token_name", tokenNameStr, "error", err)
 		return nil, fmt.Errorf("failed to create new token: %v", err)
 	}
 
@@ -606,11 +606,11 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 
 	newEntry, err := logical.StorageEntryJSON(path, token)
 	if err != nil {
-		b.Logger().Error("Failed to create storage entry", "path", path, "error", err)
+		b.Logger().Info("Failed to create storage entry", "path", path, "error", err)
 		return nil, fmt.Errorf("failed to create storage entry: %v", err)
 	}
 	if err := req.Storage.Put(ctx, newEntry); err != nil {
-		b.Logger().Error("Failed to store updated token", "path", path, "error", err)
+		b.Logger().Info("Failed to store updated token", "path", path, "error", err)
 		return nil, fmt.Errorf("failed to update token: %v", err)
 	}
 
