@@ -15,14 +15,14 @@ import (
 func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: "token",
+			Pattern: "tokens", // Consistent with pathPatternToken = "tokens"
 			Fields: map[string]*framework.FieldSchema{
 				"config_name": {
 					Type:        framework.TypeString,
 					Description: "Name of the configuration to use for token creation.",
 					Required:    true,
 				},
-				"token_name": { // Added token_name field
+				"token_name": {
 					Type:        framework.TypeString,
 					Description: "Unique name for the token within the configuration.",
 					Required:    true,
@@ -40,6 +40,10 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 				"comment": {
 					Type:        framework.TypeString,
 					Description: "Comment that describes the purpose of the token.",
+				},
+				"kv_path": {
+					Type:        framework.TypeString,
+					Description: "Optional path in the KVv2 'gtn' mount to store the token (e.g., 'databricks/tokens/mytoken'). If omitted, token is not stored in KVv2.",
 				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
@@ -91,6 +95,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	applicationID := d.Get("application_id").(string)
 	lifetimeSeconds := d.Get("lifetime_seconds").(int)
 	comment := d.Get("comment").(string)
+	kvPath, kvPathProvided := d.GetOk("kv_path")
 
 	if lifetimeSeconds < 60 || lifetimeSeconds > 7776000 {
 		return nil, fmt.Errorf("lifetime_seconds must be between 60 and 7776000")
@@ -110,6 +115,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
+	// Create Databricks client
 	client, err := databricks.NewWorkspaceClient(&databricks.Config{
 		Host:  config.BaseURL,
 		Token: config.Token,
@@ -123,7 +129,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	b.clients[configName] = client
 	b.lock.Unlock()
 
-	// Check if token_name already exists
+	// Check if token_name already exists in backend storage
 	storagePath := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenNameStr)
 	existingEntry, err := req.Storage.Get(ctx, storagePath)
 	if err != nil {
@@ -133,6 +139,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("token with name %s already exists in configuration %s", tokenNameStr, configName)
 	}
 
+	// Create token in Databricks
 	token, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
 		ApplicationId:   applicationID,
 		Comment:         comment,
@@ -143,8 +150,9 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to create token: %v", err)
 	}
 
+	// Build token entry for backend storage
 	tokenEntry := TokenStorageEntry{
-		TokenName:       tokenNameStr, // Set TokenName
+		TokenName:       tokenNameStr,
 		TokenID:         token.TokenInfo.TokenId,
 		TokenValue:      token.TokenValue,
 		ApplicationID:   applicationID,
@@ -157,7 +165,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		RotationEnabled: true,
 	}
 
-	// Use token_name in the storage path instead of token_id
+	// Store in backend storage
 	storageEntry, err := logical.StorageEntryJSON(storagePath, tokenEntry)
 	if err != nil {
 		b.Logger().Error("Failed to create storage entry", "error", err)
@@ -166,6 +174,37 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	if err := req.Storage.Put(ctx, storageEntry); err != nil {
 		b.Logger().Error("Failed to store token", "error", err)
 		return nil, fmt.Errorf("failed to store token: %v", err)
+	}
+
+	// If kv_path is provided, store in KVv2 mount "gtn"
+	if kvPathProvided {
+		kvFullPath := fmt.Sprintf("gtn/data/%s", kvPath.(string))
+		b.Logger().Info("Storing token in KVv2", "path", kvFullPath)
+
+		// Prepare data for KVv2
+		kvData := map[string]interface{}{
+			"data": map[string]interface{}{
+				"TokenValue":    token.TokenValue,
+				"TokenId":       token.TokenInfo.TokenId,
+				"CreationTime":  time.UnixMilli(token.TokenInfo.CreationTime),
+				"ExpiryTime":    time.UnixMilli(token.TokenInfo.ExpiryTime),
+				"ApplicationID": applicationID,
+				"Lifetime":      time.Duration(lifetimeSeconds) * time.Second,
+				"comment":       comment,
+			},
+		}
+
+		// Convert to JSON for storage
+		kvEntry, err := logical.StorageEntryJSON(kvFullPath, kvData)
+		if err != nil {
+			b.Logger().Error("Failed to create KVv2 storage entry", "path", kvFullPath, "error", err)
+			return nil, fmt.Errorf("failed to create KVv2 storage entry: %v", err)
+		}
+
+		if err := req.Storage.Put(ctx, kvEntry); err != nil {
+			b.Logger().Error("Failed to store token in KVv2", "path", kvFullPath, "error", err)
+			return nil, fmt.Errorf("failed to store token in KVv2 at %s: %v", kvFullPath, err)
+		}
 	}
 
 	b.Logger().Info("Token created successfully", "token_name", tokenNameStr)
@@ -487,9 +526,6 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	lifetimeSeconds := int64(token.Lifetime / time.Second) // Default to existing lifetime
 	if newLifetime, ok := d.GetOk("lifetime_seconds"); ok {
 		lifetimeSeconds = int64(newLifetime.(int))
-		if lifetimeSeconds < 60 || lifetimeSeconds > 7776000 {
-			return nil, fmt.Errorf("lifetime_seconds must be between 60 and 7776000")
-		}
 	}
 	rotationEnabled := token.RotationEnabled
 	if newRotationEnabled, ok := d.GetOk("rotation_enabled"); ok {
