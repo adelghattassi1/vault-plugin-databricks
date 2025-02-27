@@ -255,7 +255,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 }
 func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage logical.Storage, configName, tokenName string) {
 	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenName)
-	b.Logger().Debug("Checking token for rotation", "path", path)
+	b.Logger().Info("Checking token for rotation", "path", path)
 
 	entry, err := storage.Get(ctx, path)
 	if err != nil {
@@ -266,21 +266,21 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		b.Logger().Warn("Token not found for rotation", "path", path)
 		return
 	}
-	b.Logger().Debug("Retrieved token", "path", path)
+	b.Logger().Info("Retrieved token", "path", path)
 
 	var token TokenStorageEntry
 	if err := json.Unmarshal(entry.Value, &token); err != nil {
 		b.Logger().Error("Failed to unmarshal token", "path", path, "error", err)
 		return
 	}
-	b.Logger().Debug("Unmarshaled token", "token_name", tokenName)
+	b.Logger().Info("Unmarshaled token", "token_name", tokenName)
 
 	now := time.Now()
 	rotationThreshold := token.ExpiryTime.Add(-rotationGracePeriod)
-	b.Logger().Debug("Rotation check", "token_name", tokenName, "now", now.Format(time.RFC3339), "threshold", rotationThreshold.Format(time.RFC3339), "expiry", token.ExpiryTime.Format(time.RFC3339), "rotation_enabled", token.RotationEnabled)
+	b.Logger().Info("Rotation check", "token_name", tokenName, "now", now.Format(time.RFC3339), "threshold", rotationThreshold.Format(time.RFC3339), "expiry", token.ExpiryTime.Format(time.RFC3339), "rotation_enabled", token.RotationEnabled)
 
 	if !token.RotationEnabled || now.Before(rotationThreshold) {
-		b.Logger().Debug("Token does not need rotation", "token_name", tokenName, "rotation_enabled", token.RotationEnabled, "now_before_threshold", now.Before(rotationThreshold))
+		b.Logger().Info("Token does not need rotation", "token_name", tokenName, "rotation_enabled", token.RotationEnabled, "now_before_threshold", now.Before(rotationThreshold))
 		return
 	}
 

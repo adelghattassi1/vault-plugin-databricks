@@ -89,7 +89,7 @@ func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logi
 			b.Logger().Info("Token rotation stopped")
 			return
 		case <-ticker.C:
-			b.Logger().Debug("Starting token rotation check")
+			b.Logger().Info("Starting token rotation check")
 			b.rotateExpiredTokens(ctx, storage)
 		}
 	}
