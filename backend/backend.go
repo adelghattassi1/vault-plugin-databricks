@@ -17,16 +17,24 @@ import (
 const (
 	tokenCheckInterval  = 2 * time.Minute
 	rotationGracePeriod = 5 * time.Minute
+	accessTokenBuffer   = 200 * time.Second // Buffer before expiry to refresh token
 )
 
 type DatabricksBackend struct {
 	*framework.Backend
-	client    *http.Client
-	clients   map[string]*databricks.WorkspaceClient
-	view      logical.Storage
-	lock      sync.RWMutex
-	roleLocks []*locksutil.LockEntry
-	stopCh    chan struct{}
+	client       *http.Client
+	clients      map[string]*databricks.WorkspaceClient
+	accessTokens map[string]CachedAccessToken // Cache for access tokens
+	view         logical.Storage
+	lock         sync.RWMutex
+	roleLocks    []*locksutil.LockEntry
+	stopCh       chan struct{}
+}
+
+// CachedAccessToken stores the token and its expiration time
+type CachedAccessToken struct {
+	Token     string
+	ExpiresAt time.Time
 }
 
 func (b *DatabricksBackend) getClient() *http.Client {

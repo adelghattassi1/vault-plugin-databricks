@@ -74,9 +74,21 @@ type ConfigStorageEntry struct {
 	ClientSecret string `json:"client_secret"`
 }
 
-// getDatabricksAccessToken fetches an access token using OAuth client credentials
-func getDatabricksAccessToken(baseURL, clientID, clientSecret string) (string, error) {
-	tokenURL := fmt.Sprintf("%s/oidc/v1/token", baseURL)
+// getDatabricksAccessToken fetches an access token if not cached or expired
+func (b *DatabricksBackend) getDatabricksAccessToken(config ConfigStorageEntry) (string, error) {
+	b.lock.RLock()
+	cached, exists := b.accessTokens[config.BaseURL+config.ClientID] // Unique key per config
+	b.lock.RUnlock()
+
+	now := time.Now()
+	refreshTime := cached.ExpiresAt.Add(-accessTokenBuffer)
+	if exists && now.Before(refreshTime) {
+		b.Logger().Debug("Using cached access token", "base_url", config.BaseURL, "expires_at", cached.ExpiresAt.Format(time.RFC3339))
+		return cached.Token, nil
+	}
+
+	b.Logger().Debug("Fetching new access token", "base_url", config.BaseURL, "reason", "token expired or not cached")
+	tokenURL := fmt.Sprintf("%s/oidc/v1/token", config.BaseURL)
 	data := url.Values{
 		"grant_type": {"client_credentials"},
 		"scope":      {"all-apis"},
@@ -87,10 +99,10 @@ func getDatabricksAccessToken(baseURL, clientID, clientSecret string) (string, e
 		return "", fmt.Errorf("failed to create token request: %v", err)
 	}
 
-	req.SetBasicAuth(clientID, clientSecret)
+	req.SetBasicAuth(config.ClientID, config.ClientSecret)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := b.getClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to request access token: %v", err)
@@ -103,14 +115,22 @@ func getDatabricksAccessToken(baseURL, clientID, clientSecret string) (string, e
 
 	var tokenResp struct {
 		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"` // Always 3600
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 		return "", fmt.Errorf("failed to decode token response: %v", err)
 	}
 
+	// Cache the token with fixed 3600s expiration
+	b.lock.Lock()
+	b.accessTokens[config.BaseURL+config.ClientID] = CachedAccessToken{
+		Token:     tokenResp.AccessToken,
+		ExpiresAt: now.Add(3600 * time.Second), // Hardcode since expires_in is always 3600
+	}
+	b.lock.Unlock()
+
 	return tokenResp.AccessToken, nil
 }
-
 func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 	return map[string]interface{}{
 		"token_name":       token.TokenName,
@@ -156,14 +176,13 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
-	// Fetch Databricks access token
-	accessToken, err := getDatabricksAccessToken(config.BaseURL, config.ClientID, config.ClientSecret)
+	// Fetch or use cached access token
+	accessToken, err := b.getDatabricksAccessToken(config)
 	if err != nil {
 		b.Logger().Error("Failed to fetch Databricks access token", "error", err)
 		return nil, fmt.Errorf("failed to fetch access token: %v", err)
 	}
 
-	// Create Databricks client with the access token
 	client, err := databricks.NewWorkspaceClient(&databricks.Config{
 		Host:  config.BaseURL,
 		Token: accessToken,
@@ -267,7 +286,7 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		return
 	}
 
-	accessToken, err := getDatabricksAccessToken(config.BaseURL, config.ClientID, config.ClientSecret)
+	accessToken, err := b.getDatabricksAccessToken(config)
 	if err != nil {
 		b.Logger().Error("Failed to fetch Databricks access token for rotation", "error", err)
 		return
@@ -511,7 +530,7 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
-	accessToken, err := getDatabricksAccessToken(config.BaseURL, config.ClientID, config.ClientSecret)
+	accessToken, err := b.getDatabricksAccessToken(config)
 	if err != nil {
 		b.Logger().Error("Failed to fetch Databricks access token for update", "error", err)
 		return nil, fmt.Errorf("failed to fetch access token: %v", err)

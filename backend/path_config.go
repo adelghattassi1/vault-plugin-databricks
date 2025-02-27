@@ -50,7 +50,7 @@ func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 	return map[string]interface{}{
 		"base_url":      config.BaseURL,
 		"client_id":     config.ClientID,
-		"client_secret": "********", // Masked for security
+		"client_secret": "********",
 	}
 }
 
