@@ -297,6 +297,10 @@ func pathTokenOperations(b *DatabricksBackend) []*framework.Path {
 					Description: "Enable or disable automatic token rotation (for update operation)",
 					Default:     true,
 				},
+				"lifetime_seconds": {
+					Type:        framework.TypeInt,
+					Description: "The number of seconds before the token expires (for update operation). If omitted, preserves the existing lifetime.",
+				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
@@ -312,7 +316,6 @@ func pathTokenOperations(b *DatabricksBackend) []*framework.Path {
 		},
 	}
 }
-
 func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	configName, ok := d.GetOk("config_name")
 	if !ok {
@@ -423,40 +426,116 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
 	}
+	configNameStr := configName.(string)
 
 	tokenName, ok := d.GetOk("token_name")
 	if !ok {
 		return nil, fmt.Errorf("token_name not provided")
 	}
+	tokenNameStr := tokenName.(string)
 
-	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName.(string), tokenName.(string))
+	path := fmt.Sprintf("%s/%s/%s", pathPatternToken, configNameStr, tokenNameStr)
 	b.Logger().Info("Updating token", "path", path)
+
+	// Retrieve existing token from storage
 	entry, err := req.Storage.Get(ctx, path)
 	if err != nil || entry == nil {
 		b.Logger().Error("Token not found", "path", path, "error", err)
-		return nil, fmt.Errorf("token not found: %s", tokenName.(string))
+		return nil, fmt.Errorf("token not found: %s", tokenNameStr)
 	}
-	b.Logger().Info("Raw token data", "value", string(entry.Value))
 
 	var token TokenStorageEntry
 	if err := json.Unmarshal(entry.Value, &token); err != nil {
-		b.Logger().Error("Unmarshal failed", "error", err)
+		b.Logger().Error("Unmarshal failed", "path", path, "error", err)
 		return nil, fmt.Errorf("failed to parse token data: %v", err)
 	}
 
-	if comment, ok := d.GetOk("comment"); ok {
-		token.Comment = comment.(string)
+	// Get Databricks client
+	b.lock.RLock()
+	client, exists := b.clients[configNameStr]
+	b.lock.RUnlock()
+	if !exists || client == nil {
+		// Fetch config to create a new client if needed
+		configEntry, err := req.Storage.Get(ctx, "config/"+configNameStr)
+		if err != nil || configEntry == nil {
+			b.Logger().Error("Failed to retrieve config for client", "config", configNameStr, "error", err)
+			return nil, fmt.Errorf("configuration not found: %s", configNameStr)
+		}
+		var config ConfigStorageEntry
+		if err := configEntry.DecodeJSON(&config); err != nil {
+			b.Logger().Error("Failed to decode config", "config", configNameStr, "error", err)
+			return nil, fmt.Errorf("error decoding configuration: %v", err)
+		}
+		client, err = databricks.NewWorkspaceClient(&databricks.Config{
+			Host:  config.BaseURL,
+			Token: config.Token,
+		})
+		if err != nil {
+			b.Logger().Error("Failed to create Databricks client", "config", configNameStr, "error", err)
+			return nil, fmt.Errorf("failed to create Databricks client: %v", err)
+		}
+		b.lock.Lock()
+		b.clients[configNameStr] = client
+		b.lock.Unlock()
 	}
-	if rotationEnabled, ok := d.GetOk("rotation_enabled"); ok {
-		token.RotationEnabled = rotationEnabled.(bool)
-	}
-	b.Logger().Info("Updating fields", "comment", token.Comment, "rotation_enabled", token.RotationEnabled)
 
+	// Prepare parameters for new token, preserving existing values unless overridden
+	comment := token.Comment
+	if newComment, ok := d.GetOk("comment"); ok {
+		comment = newComment.(string)
+	}
+	lifetimeSeconds := int64(token.Lifetime / time.Second) // Default to existing lifetime
+	if newLifetime, ok := d.GetOk("lifetime_seconds"); ok {
+		lifetimeSeconds = int64(newLifetime.(int))
+		if lifetimeSeconds < 60 || lifetimeSeconds > 7776000 {
+			return nil, fmt.Errorf("lifetime_seconds must be between 60 and 7776000")
+		}
+	}
+	rotationEnabled := token.RotationEnabled
+	if newRotationEnabled, ok := d.GetOk("rotation_enabled"); ok {
+		rotationEnabled = newRotationEnabled.(bool)
+	}
+
+	// Delete the old token from Databricks
+	oldTokenID := token.TokenID
+	err = client.TokenManagement.DeleteByTokenId(ctx, oldTokenID)
+	if err != nil {
+		b.Logger().Warn("Failed to delete old token during update", "token_name", tokenNameStr, "token_id", oldTokenID, "error", err)
+		// Proceed anyway since we’ll replace it
+	}
+
+	// Create a new token in Databricks
+	newToken, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
+		ApplicationId:   token.ApplicationID, // Preserve original application ID
+		Comment:         comment,
+		LifetimeSeconds: lifetimeSeconds,
+	})
+	if err != nil {
+		b.Logger().Error("Failed to create new token during update", "token_name", tokenNameStr, "error", err)
+		return nil, fmt.Errorf("failed to create new token: %v", err)
+	}
+
+	// Update token entry with new Databricks token details
+	token.TokenID = newToken.TokenInfo.TokenId
+	token.TokenValue = newToken.TokenValue
+	token.Comment = comment
+	token.Lifetime = time.Duration(lifetimeSeconds) * time.Second
+	token.CreationTime = time.UnixMilli(newToken.TokenInfo.CreationTime)
+	token.ExpiryTime = time.UnixMilli(newToken.TokenInfo.ExpiryTime)
+	token.LastRotated = time.Now()
+	token.RotationEnabled = rotationEnabled
+	// Note: TokenName and Configuration remain unchanged since they’re identifiers
+
+	b.Logger().Info("Updated token fields", "token_name", tokenNameStr, "token_id", token.TokenID, "comment", token.Comment, "rotation_enabled", token.RotationEnabled)
+
+	// Persist the updated token
 	newEntry, err := logical.StorageEntryJSON(path, token)
 	if err != nil {
+		b.Logger().Error("Failed to create storage entry", "path", path, "error", err)
 		return nil, fmt.Errorf("failed to create storage entry: %v", err)
 	}
 	if err := req.Storage.Put(ctx, newEntry); err != nil {
+		b.Logger().Error("Failed to store updated token", "path", path, "error", err)
 		return nil, fmt.Errorf("failed to update token: %v", err)
 	}
 

@@ -204,7 +204,7 @@ func pathConfig(b *DatabricksBackend) []*framework.Path {
 func pathConfigList(b *DatabricksBackend) []*framework.Path {
 	paths := []*framework.Path{
 		{
-			Pattern: "configs",
+			Pattern: "configs/",
 			Fields:  configSchema,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
