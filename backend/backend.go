@@ -89,7 +89,7 @@ func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logi
 			b.Logger().Info("Token rotation stopped")
 			return
 		case <-ticker.C:
-			b.Logger().Info("Starting token rotation check")
+			b.Logger().Debug("Starting token rotation check")
 			b.rotateExpiredTokens(ctx, storage)
 		}
 	}
@@ -110,7 +110,7 @@ func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage log
 
 	configs, err := storage.List(ctx, "config/")
 	if err != nil {
-		b.Logger().Info("Failed to list configs for rotation", "error", err)
+		b.Logger().Error("Failed to list configs for rotation", "error", err)
 		return
 	}
 
@@ -122,7 +122,7 @@ func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage log
 
 		tokens, err := storage.List(ctx, fmt.Sprintf("%s/%s/", pathPatternToken, config))
 		if err != nil {
-			b.Logger().Info("Failed to list tokens for config", "config", config, "error", err)
+			b.Logger().Error("Failed to list tokens for config", "config", config, "error", err)
 			continue
 		}
 
