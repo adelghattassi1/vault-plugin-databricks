@@ -215,6 +215,7 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 	}
 
 	client, err := b.getWorkspaceClient(config)
+	b.Logger().Info("Initiating client", "client", client, "config", configName)
 	if err != nil {
 		b.Logger().Info("Failed to get Databricks client for rotation", "config", configName, "error", err)
 		return

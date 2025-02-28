@@ -43,6 +43,7 @@ func (b *DatabricksBackend) getWorkspaceClient(config ConfigStorageEntry) (*data
 	key := config.BaseURL + config.ClientID
 	b.lock.RLock()
 	client, exists := b.clients[key]
+	b.Logger().Info("failed to create Databricks client: ", " exists", exists)
 	b.lock.RUnlock()
 	if exists {
 		return client, nil
@@ -62,6 +63,7 @@ func (b *DatabricksBackend) getWorkspaceClient(config ConfigStorageEntry) (*data
 
 	b.lock.Lock()
 	b.clients[key] = client
+	b.Logger().Info("failed to create Databricks client: ", "b.clients[key] ", b.clients[key])
 	b.lock.Unlock()
 	return client, nil
 }
