@@ -19,21 +19,15 @@ const (
 	rotationGracePeriod = 5 * time.Minute
 )
 
-type CachedToken struct {
-	AccessToken string
-	ExpiresAt   time.Time
-}
 type DatabricksBackend struct {
 	*framework.Backend
-	client       *http.Client
-	clients      map[string]*databricks.WorkspaceClient
-	accessTokens map[string]CachedToken
-	view         logical.Storage
-	lock         sync.RWMutex
-	roleLocks    []*locksutil.LockEntry
-	stopCh       chan struct{}
-	ctx          context.Context    // New context for the backend's lifetime
-	cancel       context.CancelFunc // Function to cancel the context
+	client    *http.Client
+	clients   map[string]*databricks.WorkspaceClient
+	view      logical.Storage
+	lock      sync.RWMutex
+	roleLocks []*locksutil.LockEntry
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 func (b *DatabricksBackend) getClient() *http.Client {
@@ -45,25 +39,49 @@ func (b *DatabricksBackend) getClient() *http.Client {
 	return b.client
 }
 
+func (b *DatabricksBackend) getWorkspaceClient(config ConfigStorageEntry) (*databricks.WorkspaceClient, error) {
+	key := config.BaseURL + config.ClientID
+	b.lock.RLock()
+	client, exists := b.clients[key]
+	b.lock.RUnlock()
+	if exists {
+		return client, nil
+	}
+
+	cfg := &databricks.Config{
+		Host:         config.BaseURL,
+		ClientID:     config.ClientID,
+		ClientSecret: config.ClientSecret,
+		AuthType:     "oauth-m2m",
+	}
+	client, err := databricks.NewWorkspaceClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Databricks client: %v", err)
+	}
+
+	b.lock.Lock()
+	b.clients[key] = client
+	b.lock.Unlock()
+	return client, nil
+}
+
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := Backend(conf)
 	if err := b.Setup(ctx, conf); err != nil {
 		return nil, err
 	}
-	go b.startTokenRotation(b.ctx, conf.StorageView) // Use b.ctx instead of ctx
+	go b.startTokenRotation(b.ctx, conf.StorageView)
 	return b, nil
 }
 
 func Backend(conf *logical.BackendConfig) *DatabricksBackend {
-	ctx, cancel := context.WithCancel(context.Background()) // Create a long-lived context
+	ctx, cancel := context.WithCancel(context.Background())
 	backend := &DatabricksBackend{
-		view:         conf.StorageView,
-		clients:      make(map[string]*databricks.WorkspaceClient),
-		roleLocks:    locksutil.CreateLocks(),
-		accessTokens: make(map[string]CachedToken),
-		stopCh:       make(chan struct{}),
-		ctx:          ctx,    // Assign the context
-		cancel:       cancel, // Assign the cancel function
+		view:      conf.StorageView,
+		clients:   make(map[string]*databricks.WorkspaceClient),
+		roleLocks: locksutil.CreateLocks(),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 	backend.Backend = &framework.Backend{
 		BackendType: logical.TypeLogical,
@@ -77,6 +95,10 @@ func Backend(conf *logical.BackendConfig) *DatabricksBackend {
 		),
 	}
 	return backend
+}
+
+func (b *DatabricksBackend) Cleanup(ctx context.Context) {
+	b.cancel()
 }
 
 func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logical.Storage) {
@@ -93,10 +115,6 @@ func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logi
 			b.rotateExpiredTokens(ctx, storage)
 		}
 	}
-}
-
-func (b *DatabricksBackend) Cleanup(ctx context.Context) {
-	b.cancel()
 }
 
 func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage logical.Storage) {

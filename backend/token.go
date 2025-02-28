@@ -4,12 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
-	"github.com/databricks/databricks-sdk-go"
 	"github.com/databricks/databricks-sdk-go/service/settings"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -74,71 +70,6 @@ type ConfigStorageEntry struct {
 	ClientSecret string `json:"client_secret"`
 }
 
-// getDatabricksAccessToken fetches an access token using OAuth client credentials
-func (b *DatabricksBackend) getDatabricksAccessToken(config ConfigStorageEntry) (string, error) {
-	// Create a unique key for this configuration
-	key := config.BaseURL + config.ClientID
-
-	// Check if a valid cached token exists
-	b.lock.RLock()
-	cached, exists := b.accessTokens[key]
-	b.lock.RUnlock()
-
-	now := time.Now()
-	// Add a 5-minute buffer to refresh the token before it expires
-	buffer := 5 * time.Minute
-	if exists && now.Before(cached.ExpiresAt.Add(-buffer)) {
-		b.Logger().Debug("Using cached access token", "base_url", config.BaseURL, "expires_at", cached.ExpiresAt)
-		return cached.AccessToken, nil
-	}
-
-	// Fetch a new token if no valid cached token exists
-	b.Logger().Debug("Fetching new access token", "base_url", config.BaseURL, "reason", "token expired or not cached")
-	tokenURL := fmt.Sprintf("%s/oidc/v1/token", config.BaseURL)
-	data := url.Values{
-		"grant_type": {"client_credentials"},
-		"scope":      {"all-apis"},
-	}
-
-	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("failed to create token request: %v", err)
-	}
-
-	req.SetBasicAuth(config.ClientID, config.ClientSecret)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	client := b.getClient()
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to request access token: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("token request failed with status: %d", resp.StatusCode)
-	}
-
-	var tokenResp struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int64  `json:"expires_in"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return "", fmt.Errorf("failed to decode token response: %v", err)
-	}
-
-	// Calculate expiration time
-	expiresAt := now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-	// Cache the new token
-	b.lock.Lock()
-	b.accessTokens[key] = CachedToken{
-		AccessToken: tokenResp.AccessToken,
-		ExpiresAt:   expiresAt,
-	}
-	b.lock.Unlock()
-
-	return tokenResp.AccessToken, nil
-}
 func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 	return map[string]interface{}{
 		"token_name":       token.TokenName,
@@ -184,26 +115,11 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
-	// Fetch Databricks access token using the new method
-	accessToken, err := b.getDatabricksAccessToken(config)
+	client, err := b.getWorkspaceClient(config)
 	if err != nil {
-		b.Logger().Error("Failed to fetch Databricks access token", "error", err)
-		return nil, fmt.Errorf("failed to fetch access token: %v", err)
+		b.Logger().Error("Failed to get Databricks client", "error", err)
+		return nil, fmt.Errorf("failed to get Databricks client: %v", err)
 	}
-
-	// Rest of the function remains unchanged
-	client, err := databricks.NewWorkspaceClient(&databricks.Config{
-		Host:  config.BaseURL,
-		Token: accessToken,
-	})
-	if err != nil {
-		b.Logger().Error("Failed to create Databricks client", "error", err)
-		return nil, fmt.Errorf("failed to create Databricks client: %v", err)
-	}
-
-	b.lock.Lock()
-	b.clients[configName] = client
-	b.lock.Unlock()
 
 	storagePath := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName, tokenNameStr)
 	existingEntry, err := req.Storage.Get(ctx, storagePath)
@@ -298,27 +214,10 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		return
 	}
 
-	accessToken, err := b.getDatabricksAccessToken(config)
+	client, err := b.getWorkspaceClient(config)
 	if err != nil {
-		b.Logger().Error("Failed to fetch Databricks access token for rotation", "error", err)
+		b.Logger().Error("Failed to get Databricks client for rotation", "config", configName, "error", err)
 		return
-	}
-
-	b.lock.RLock()
-	client, exists := b.clients[configName]
-	b.lock.RUnlock()
-	if !exists || client == nil {
-		client, err = databricks.NewWorkspaceClient(&databricks.Config{
-			Host:  config.BaseURL,
-			Token: accessToken,
-		})
-		if err != nil {
-			b.Logger().Error("Failed to create Databricks client for rotation", "config", configName, "error", err)
-			return
-		}
-		b.lock.Lock()
-		b.clients[configName] = client
-		b.lock.Unlock()
 	}
 
 	newToken, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
@@ -433,26 +332,37 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
 	}
+	configNameStr := configName.(string)
 
 	tokenName, ok := d.GetOk("token_name")
 	if !ok {
 		return nil, fmt.Errorf("token_name not provided")
 	}
+	tokenNameStr := tokenName.(string)
 
-	key := fmt.Sprintf("%s/%s/%s", pathPatternToken, configName.(string), tokenName.(string))
+	key := fmt.Sprintf("%s/%s/%s", pathPatternToken, configNameStr, tokenNameStr)
+
+	configEntry, err := req.Storage.Get(ctx, "config/"+configNameStr)
+	if err != nil || configEntry == nil {
+		return nil, fmt.Errorf("failed to retrieve configuration: %v", err)
+	}
+	var config ConfigStorageEntry
+	if err := configEntry.DecodeJSON(&config); err != nil {
+		return nil, fmt.Errorf("error decoding configuration: %v", err)
+	}
+
+	client, err := b.getWorkspaceClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Databricks client: %v", err)
+	}
 
 	entry, err := req.Storage.Get(ctx, key)
 	if err == nil && entry != nil {
 		var token TokenStorageEntry
 		if err := json.Unmarshal(entry.Value, &token); err == nil {
-			b.lock.RLock()
-			client, exists := b.clients[configName.(string)]
-			b.lock.RUnlock()
-			if exists {
-				err = client.TokenManagement.DeleteByTokenId(ctx, token.TokenID)
-				if err != nil {
-					b.Logger().Warn("Failed to revoke token during deletion", "error", err)
-				}
+			err = client.TokenManagement.DeleteByTokenId(ctx, token.TokenID)
+			if err != nil {
+				b.Logger().Warn("Failed to revoke token during deletion", "error", err)
 			}
 		}
 	}
@@ -484,7 +394,6 @@ func pathListTokens(b *DatabricksBackend) []*framework.Path {
 }
 
 func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	// Extract the config_name field from the request data
 	configName, ok := d.GetOk("config_name")
 	if !ok {
 		return nil, fmt.Errorf("config_name not provided")
@@ -541,27 +450,10 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("error decoding configuration: %v", err)
 	}
 
-	accessToken, err := b.getDatabricksAccessToken(config)
+	client, err := b.getWorkspaceClient(config)
 	if err != nil {
-		b.Logger().Error("Failed to fetch Databricks access token for update", "error", err)
-		return nil, fmt.Errorf("failed to fetch access token: %v", err)
-	}
-
-	b.lock.RLock()
-	client, exists := b.clients[configNameStr]
-	b.lock.RUnlock()
-	if !exists || client == nil {
-		client, err = databricks.NewWorkspaceClient(&databricks.Config{
-			Host:  config.BaseURL,
-			Token: accessToken,
-		})
-		if err != nil {
-			b.Logger().Error("Failed to create Databricks client", "config", configNameStr, "error", err)
-			return nil, fmt.Errorf("failed to create Databricks client: %v", err)
-		}
-		b.lock.Lock()
-		b.clients[configNameStr] = client
-		b.lock.Unlock()
+		b.Logger().Error("Failed to get Databricks client for update", "config", configNameStr, "error", err)
+		return nil, fmt.Errorf("failed to get Databricks client: %v", err)
 	}
 
 	comment := token.Comment
