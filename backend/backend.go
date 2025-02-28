@@ -41,10 +41,8 @@ func (b *DatabricksBackend) getClient() *http.Client {
 
 func (b *DatabricksBackend) getWorkspaceClient(config ConfigStorageEntry) (*databricks.WorkspaceClient, error) {
 	key := config.BaseURL + config.ClientID
-	b.lock.RLock()
 	client, exists := b.clients[key]
 	b.Logger().Info("failed to create Databricks client: ", " exists", exists)
-	b.lock.RUnlock()
 	if exists {
 		return client, nil
 	}
