@@ -204,19 +204,19 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 
 	configEntry, err := storage.Get(ctx, "config/"+configName)
 	if err != nil || configEntry == nil {
-		b.Logger().Error("Failed to retrieve config for rotation", "config", configName, "error", err)
+		b.Logger().Info("Failed to retrieve config for rotation", "config", configName, "error", err)
 		return
 	}
 
 	var config ConfigStorageEntry
 	if err := configEntry.DecodeJSON(&config); err != nil {
-		b.Logger().Error("Failed to decode config for rotation", "config", configName, "error", err)
+		b.Logger().Info("Failed to decode config for rotation", "config", configName, "error", err)
 		return
 	}
 
 	client, err := b.getWorkspaceClient(config)
 	if err != nil {
-		b.Logger().Error("Failed to get Databricks client for rotation", "config", configName, "error", err)
+		b.Logger().Info("Failed to get Databricks client for rotation", "config", configName, "error", err)
 		return
 	}
 
@@ -226,7 +226,7 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 		LifetimeSeconds: int64(token.Lifetime / time.Second),
 	})
 	if err != nil {
-		b.Logger().Error("Failed to create new token during rotation", "token_name", tokenName, "error", err)
+		b.Logger().Info("Failed to create new token during rotation", "token_name", tokenName, "error", err)
 		return
 	}
 
@@ -239,17 +239,17 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 
 	newEntry, err := logical.StorageEntryJSON(path, token)
 	if err != nil {
-		b.Logger().Error("Failed to create storage entry for rotated token", "token_name", tokenName, "error", err)
+		b.Logger().Info("Failed to create storage entry for rotated token", "token_name", tokenName, "error", err)
 		return
 	}
 	if err := storage.Put(ctx, newEntry); err != nil {
-		b.Logger().Error("Failed to store rotated token", "token_name", tokenName, "error", err)
+		b.Logger().Info("Failed to store rotated token", "token_name", tokenName, "error", err)
 		return
 	}
 
 	err = client.TokenManagement.DeleteByTokenId(ctx, oldTokenID)
 	if err != nil {
-		b.Logger().Warn("Failed to revoke old token after rotation", "token_name", tokenName, "old_token_id", oldTokenID, "error", err)
+		b.Logger().Info("Failed to revoke old token after rotation", "token_name", tokenName, "old_token_id", oldTokenID, "error", err)
 	}
 
 	b.Logger().Info("Successfully rotated token", "token_name", tokenName, "new_token_id", token.TokenID)
