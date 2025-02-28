@@ -56,6 +56,7 @@ func (b *DatabricksBackend) getWorkspaceClient(config ConfigStorageEntry) (*data
 	}
 	client, err := databricks.NewWorkspaceClient(cfg)
 	if err != nil {
+		b.Logger().Info("failed to create Databricks client: ", " error", err)
 		return nil, fmt.Errorf("failed to create Databricks client: %v", err)
 	}
 
