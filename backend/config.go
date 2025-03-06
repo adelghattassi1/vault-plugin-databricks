@@ -9,7 +9,7 @@ import (
 )
 
 func getConfig(ctx context.Context, s logical.Storage, data *framework.FieldData) (*ConfigStorageEntry, error) {
-	name, ok := data.GetOk("name")
+	name, ok := data.GetOk("application_id")
 	if !ok {
 		return nil, fmt.Errorf("name not provided")
 	}

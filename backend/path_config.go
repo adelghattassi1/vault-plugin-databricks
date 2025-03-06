@@ -27,9 +27,9 @@ func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.
 }
 
 var configSchema = map[string]*framework.FieldSchema{
-	"name": {
+	"application_id": {
 		Type:        framework.TypeString,
-		Description: "The name of the service principal.",
+		Description: "The application ID of the service principal.",
 		Required:    true,
 	},
 	"product": {
@@ -68,7 +68,7 @@ func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 }
 
 func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	name, ok := d.GetOk("name")
+	name, ok := d.GetOk("application_id")
 	if !ok {
 		return nil, fmt.Errorf("name not provided")
 	}
@@ -114,7 +114,7 @@ func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Req
 
 func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	warnings := []string{}
-	name, ok := data.GetOk("name")
+	name, ok := data.GetOk("application_id")
 	if !ok {
 		return nil, fmt.Errorf("name parameter not provided")
 	}
@@ -127,7 +127,7 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 		return nil, fmt.Errorf("environment parameter not provided")
 	}
 
-	configPath := fmt.Sprintf("%s/%s/dbx_tokens/%s/configuration", product, environment, name)
+	configPath := fmt.Sprintf("%s/%s/dbx_tokens/service_principals/%s/configuration", product, environment, name)
 	externalStorage, err := b.getExternalStorage()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get external storage: %v", err)
@@ -180,7 +180,7 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 func pathConfig(b *DatabricksBackend) []*framework.Path {
 	paths := []*framework.Path{
 		{
-			Pattern: "sp/(?P<product>.+)/(?P<environment>.+)/(?P<name>.+)",
+			Pattern: "config/(?P<product>.+)/(?P<environment>.+)/(?P<application_id>.+)",
 			Fields:  configSchema,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
@@ -232,12 +232,12 @@ var configExamples = []framework.RequestExample{
 	{
 		Description: "Create/update service principal configuration",
 		Data: map[string]interface{}{
-			"product":       "my-product",
-			"environment":   "dev",
-			"name":          "my-sp",
-			"base_url":      "https://my-databricks-workspace.cloud.databricks.com",
-			"client_id":     "my-client-id",
-			"client_secret": "my-client-secret",
+			"product":        "my-product",
+			"environment":    "dev",
+			"application_id": "my-sp-id",
+			"base_url":       "https://my-databricks-workspace.cloud.databricks.com",
+			"client_id":      "my-client-id",
+			"client_secret":  "my-client-secret",
 		},
 	},
 }
