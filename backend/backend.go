@@ -121,7 +121,7 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 	if err := b.Setup(ctx, conf); err != nil {
 		return nil, err
 	}
-	go b.startTokenRotation(b.ctx, conf.StorageView)
+	//go b.startTokenRotation(b.ctx, conf.StorageView)
 	return b, nil
 }
 
@@ -152,60 +152,60 @@ func (b *DatabricksBackend) Cleanup(ctx context.Context) {
 	b.cancel()
 }
 
-func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logical.Storage) {
-	ticker := time.NewTicker(tokenCheckInterval)
-	defer ticker.Stop()
+//func (b *DatabricksBackend) startTokenRotation(ctx context.Context, storage logical.Storage) {
+//	ticker := time.NewTicker(tokenCheckInterval)
+//	defer ticker.Stop()
+//
+//	for {
+//		select {
+//		case <-ctx.Done():
+//			b.Logger().Info("Token rotation stopped")
+//			return
+//		case <-ticker.C:
+//			b.Logger().Debug("Starting token rotation check")
+//			b.rotateExpiredTokens(ctx, storage)
+//		}
+//	}
+//}
 
-	for {
-		select {
-		case <-ctx.Done():
-			b.Logger().Info("Token rotation stopped")
-			return
-		case <-ticker.C:
-			b.Logger().Debug("Starting token rotation check")
-			b.rotateExpiredTokens(ctx, storage)
-		}
-	}
-}
-
-func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage logical.Storage) {
-	b.lock.Lock()
-	defer b.lock.Unlock()
-
-	if ctx.Err() != nil {
-		b.Logger().Info("Skipping config listing due to canceled context")
-		return
-	}
-
-	externalStorage, err := b.getExternalStorage()
-	if err != nil {
-		b.Logger().Error("Failed to get external storage", "error", err)
-		return
-	}
-
-	configs, err := externalStorage.List(ctx, "")
-	if err != nil {
-		b.Logger().Error("Failed to list configs for rotation", "error", err)
-		return
-	}
-
-	for _, config := range configs {
-		if ctx.Err() != nil {
-			b.Logger().Info("Skipping token listing due to canceled context")
-			break
-		}
-
-		tokens, err := externalStorage.List(ctx, fmt.Sprintf("%s/tokens/", config))
-		if err != nil {
-			b.Logger().Error("Failed to list tokens for config", "config", config, "error", err)
-			continue
-		}
-
-		for _, tokenName := range tokens {
-			b.checkAndRotateToken(ctx, externalStorage, config, tokenName)
-		}
-	}
-}
+//func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage logical.Storage) {
+//	b.lock.Lock()
+//	defer b.lock.Unlock()
+//
+//	if ctx.Err() != nil {
+//		b.Logger().Info("Skipping config listing due to canceled context")
+//		return
+//	}
+//
+//	externalStorage, err := b.getExternalStorage()
+//	if err != nil {
+//		b.Logger().Error("Failed to get external storage", "error", err)
+//		return
+//	}
+//
+//	configs, err := externalStorage.List(ctx, "")
+//	if err != nil {
+//		b.Logger().Error("Failed to list configs for rotation", "error", err)
+//		return
+//	}
+//
+//	for _, config := range configs {
+//		if ctx.Err() != nil {
+//			b.Logger().Info("Skipping token listing due to canceled context")
+//			break
+//		}
+//
+//		tokens, err := externalStorage.List(ctx, fmt.Sprintf("%s/tokens/", config))
+//		if err != nil {
+//			b.Logger().Error("Failed to list tokens for config", "config", config, "error", err)
+//			continue
+//		}
+//
+//		for _, tokenName := range tokens {
+//			b.checkAndRotateToken(ctx, externalStorage, config, tokenName)
+//		}
+//	}
+//}
 
 const backendHelp = `
 The Databricks token engine dynamically generates Databricks API tokens
