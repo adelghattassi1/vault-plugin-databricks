@@ -16,21 +16,22 @@ type APILogicalStorage struct {
 
 // Get retrieves a storage entry from the external "gtn" mount
 func (s *APILogicalStorage) Get(ctx context.Context, key string) (*logical.StorageEntry, error) {
-	secret, err := s.client.ReadWithContext(ctx, s.mountPoint+"/"+key)
+	// For KV v2, read from /data/
+	path := s.mountPoint + "/data/" + key
+	secret, err := s.client.ReadWithContext(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read from %s/%s: %v", s.mountPoint, key, err)
+		return nil, fmt.Errorf("failed to read from %s: %v", path, err)
 	}
 	if secret == nil || secret.Data == nil {
 		return nil, nil // Not found
 	}
 
-	// Assume data is stored under the "data" key in the KV store
+	// KV v2 stores data under "data" key
 	data, ok := secret.Data["data"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("invalid data format in %s/%s", s.mountPoint, key)
+		return nil, fmt.Errorf("invalid data format in %s", path)
 	}
 
-	// Serialize the data to bytes
 	value, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize data: %v", err)
@@ -44,26 +45,30 @@ func (s *APILogicalStorage) Get(ctx context.Context, key string) (*logical.Stora
 
 // Put stores a storage entry in the external "gtn" mount
 func (s *APILogicalStorage) Put(ctx context.Context, entry *logical.StorageEntry) error {
-	// Deserialize the entry value into a map for storage
+	// Deserialize the entry value into a map
 	var data map[string]interface{}
 	if err := json.Unmarshal(entry.Value, &data); err != nil {
 		return fmt.Errorf("failed to unmarshal data: %v", err)
 	}
 
-	_, err := s.client.WriteWithContext(ctx, s.mountPoint+"/"+entry.Key, map[string]interface{}{
+	// For KV v2, write to /data/
+	path := s.mountPoint + "/data/" + entry.Key
+	_, err := s.client.WriteWithContext(ctx, path, map[string]interface{}{
 		"data": data,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to write to %s/%s: %v", s.mountPoint, entry.Key, err)
+		return fmt.Errorf("failed to write to %s: %v", path, err)
 	}
 	return nil
 }
 
 // List retrieves a list of keys under a prefix from the external "gtn" mount
 func (s *APILogicalStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	secret, err := s.client.ListWithContext(ctx, s.mountPoint+"/"+prefix)
+	// For KV v2, list from /metadata/
+	path := s.mountPoint + "/metadata/" + prefix
+	secret, err := s.client.ListWithContext(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list %s/%s: %v", s.mountPoint, prefix, err)
+		return nil, fmt.Errorf("failed to list %s: %v", path, err)
 	}
 	if secret == nil || secret.Data == nil {
 		return []string{}, nil // No keys found
@@ -71,7 +76,7 @@ func (s *APILogicalStorage) List(ctx context.Context, prefix string) ([]string, 
 
 	keys, ok := secret.Data["keys"].([]interface{})
 	if !ok {
-		return nil, fmt.Errorf("invalid list response from %s/%s", s.mountPoint, prefix)
+		return nil, fmt.Errorf("invalid list response from %s", path)
 	}
 
 	result := make([]string, len(keys))
@@ -83,9 +88,11 @@ func (s *APILogicalStorage) List(ctx context.Context, prefix string) ([]string, 
 
 // Delete removes a storage entry from the external "gtn" mount
 func (s *APILogicalStorage) Delete(ctx context.Context, key string) error {
-	_, err := s.client.DeleteWithContext(ctx, s.mountPoint+"/"+key)
+	// For KV v2, delete from /data/
+	path := s.mountPoint + "/data/" + key
+	_, err := s.client.DeleteWithContext(ctx, path)
 	if err != nil {
-		return fmt.Errorf("failed to delete %s/%s: %v", s.mountPoint, key, err)
+		return fmt.Errorf("failed to delete %s: %v", path, err)
 	}
 	return nil
 }
