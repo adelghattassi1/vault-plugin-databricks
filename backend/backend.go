@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -84,14 +83,14 @@ func (b *DatabricksBackend) getExternalStorage() (logical.Storage, error) {
 
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := Backend(conf)
-	token := os.Getenv("VAULT_TOKEN")
 
-	if token == "" {
-		return nil, fmt.Errorf("VAULT_TOKEN environment variable not set")
+	token, ok := conf.Config["token"]
+	if !ok || token == "" {
+		return nil, fmt.Errorf("missing token in configuration for Vault API client")
 	}
-	vaultAddr := os.Getenv("VAULT_ADDR")
-	if vaultAddr == "" {
-		return nil, fmt.Errorf("VAULT_ADDR environment variable not set")
+	vaultAddr, ok := conf.Config["address"]
+	if !ok || vaultAddr == "" {
+		return nil, fmt.Errorf("missing vaultAddr in configuration for Vault API client")
 	}
 	client, err := api.NewClient(&api.Config{
 		Address: vaultAddr,
