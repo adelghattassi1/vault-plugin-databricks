@@ -8,7 +8,11 @@ import (
 )
 
 func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	configs, err := req.Storage.List(ctx, "config/")
+	externalStorage, err := b.getExternalStorage()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get external storage: %v", err)
+	}
+	configs, err := externalStorage.List(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list config entries: %v", err)
 	}
@@ -26,7 +30,17 @@ func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.
 var configSchema = map[string]*framework.FieldSchema{
 	"name": {
 		Type:        framework.TypeString,
-		Description: "The name of the configuration.",
+		Description: "The name of the service principal.",
+		Required:    true,
+	},
+	"product": {
+		Type:        framework.TypeString,
+		Description: "Name of the product associated with the service principal.",
+		Required:    true,
+	},
+	"environment": {
+		Type:        framework.TypeString,
+		Description: "Environment of the service principal (e.g., dev, prod).",
 		Required:    true,
 	},
 	"base_url": {
@@ -48,6 +62,8 @@ var configSchema = map[string]*framework.FieldSchema{
 
 func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 	return map[string]interface{}{
+		"product":       config.Product,
+		"environment":   config.Environment,
 		"base_url":      config.BaseURL,
 		"client_id":     config.ClientID,
 		"client_secret": "********",
@@ -59,10 +75,22 @@ func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical
 	if !ok {
 		return nil, fmt.Errorf("name not provided")
 	}
+	product, ok := d.GetOk("product")
+	if !ok {
+		return nil, fmt.Errorf("product not provided")
+	}
+	environment, ok := d.GetOk("environment")
+	if !ok {
+		return nil, fmt.Errorf("environment not provided")
+	}
 
-	configKey := fmt.Sprintf("config/%s", name.(string))
+	configPath := fmt.Sprintf("%s/%s/%s", product, environment, name)
+	externalStorage, err := b.getExternalStorage()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get external storage: %v", err)
+	}
 
-	if err := req.Storage.Delete(ctx, configKey); err != nil {
+	if err := externalStorage.Delete(ctx, configPath); err != nil {
 		return nil, fmt.Errorf("failed to delete configuration: %v", err)
 	}
 
@@ -70,7 +98,11 @@ func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical
 }
 
 func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	config, err := getConfig(ctx, req.Storage, data)
+	externalStorage, err := b.getExternalStorage()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get external storage: %v", err)
+	}
+	config, err := getConfig(ctx, externalStorage, data)
 	if err != nil {
 		return nil, err
 	}
@@ -89,14 +121,31 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 	if !ok {
 		return nil, fmt.Errorf("name parameter not provided")
 	}
-	nameStr := name.(string)
-	config, err := getConfig(ctx, req.Storage, data)
+	product, ok := data.GetOk("product")
+	if !ok {
+		return nil, fmt.Errorf("product parameter not provided")
+	}
+	environment, ok := data.GetOk("environment")
+	if !ok {
+		return nil, fmt.Errorf("environment parameter not provided")
+	}
+
+	configPath := fmt.Sprintf("%s/%s/%s", product, environment, name)
+	externalStorage, err := b.getExternalStorage()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get external storage: %v", err)
+	}
+
+	config, err := getConfig(ctx, externalStorage, data)
 	if err != nil {
 		return nil, err
 	}
 	if config == nil {
 		config = &ConfigStorageEntry{}
 	}
+
+	config.Product = product.(string)
+	config.Environment = environment.(string)
 
 	baseURL, ok := data.GetOk("base_url")
 	if ok {
@@ -119,13 +168,13 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 		return nil, fmt.Errorf("client_secret is required")
 	}
 
-	entry, err := logical.StorageEntryJSON("config/"+nameStr, config)
+	entry, err := logical.StorageEntryJSON(configPath, config)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create storage entry: %v", err)
 	}
 
-	if err := req.Storage.Put(ctx, entry); err != nil {
-		return nil, err
+	if err := externalStorage.Put(ctx, entry); err != nil {
+		return nil, fmt.Errorf("failed to store configuration: %v", err)
 	}
 
 	return &logical.Response{
@@ -137,7 +186,7 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 func pathConfig(b *DatabricksBackend) []*framework.Path {
 	paths := []*framework.Path{
 		{
-			Pattern: "config/(?P<name>.+)",
+			Pattern: "sp/(?P<product>.+)/(?P<environment>.+)/(?P<name>.+)",
 			Fields:  configSchema,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
@@ -176,18 +225,21 @@ func pathConfigList(b *DatabricksBackend) []*framework.Path {
 }
 
 const pathConfigHelpSyn = `
-Configure the Databricks backend.
+Configure the Databricks backend with service principal credentials.
 `
 
 const pathConfigHelpDesc = `
 The Databricks backend requires OAuth credentials (client_id and client_secret) for creating access tokens via M2M authentication.
-This endpoint is used to configure those credentials as well as default values for the backend in general.
+This endpoint configures service principal credentials under a product and environment, stored in the external "gtn" mount.
 `
 
 var configExamples = []framework.RequestExample{
 	{
-		Description: "Create/update backend configuration",
+		Description: "Create/update service principal configuration",
 		Data: map[string]interface{}{
+			"product":       "my-product",
+			"environment":   "dev",
+			"name":          "my-sp",
 			"base_url":      "https://my-databricks-workspace.cloud.databricks.com",
 			"client_id":     "my-client-id",
 			"client_secret": "my-client-secret",

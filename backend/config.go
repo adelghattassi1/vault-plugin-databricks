@@ -2,26 +2,40 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
-// ConfigStorageEntry structure represents the config as it is stored within vault
-
+// getConfig retrieves the service principal configuration from the external storage
 func getConfig(ctx context.Context, s logical.Storage, data *framework.FieldData) (*ConfigStorageEntry, error) {
-	name := data.Get("name").(string)
-	var config ConfigStorageEntry
-	configRaw, err := s.Get(ctx, "config/"+name)
-	if err != nil {
-		return nil, err
+	name, ok := data.GetOk("name")
+	if !ok {
+		return nil, fmt.Errorf("name not provided")
 	}
-	if configRaw == nil {
+	product, ok := data.GetOk("product")
+	if !ok {
+		return nil, fmt.Errorf("product not provided")
+	}
+	environment, ok := data.GetOk("environment")
+	if !ok {
+		return nil, fmt.Errorf("environment not provided")
+	}
+
+	configPath := fmt.Sprintf("%s/%s/%s", product, environment, name)
+	entry, err := s.Get(ctx, configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve config from %s: %v", configPath, err)
+	}
+	if entry == nil {
 		return nil, nil
 	}
 
-	if err := configRaw.DecodeJSON(&config); err != nil {
-		return nil, err
+	var config ConfigStorageEntry
+	if err := json.Unmarshal(entry.Value, &config); err != nil {
+		return nil, fmt.Errorf("failed to decode config at %s: %v", configPath, err)
 	}
 
-	return &config, err
+	return &config, nil
 }

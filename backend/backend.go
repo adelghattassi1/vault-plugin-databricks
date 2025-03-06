@@ -4,30 +4,33 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/databricks/databricks-sdk-go"
+	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/locksutil"
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
 const (
-	tokenCheckInterval  = 2 * time.Minute
-	rotationGracePeriod = 5 * time.Minute
+	tokenCheckInterval  = 87600 * time.Hour
+	rotationGracePeriod = 5 * time.Hour
 )
 
 type DatabricksBackend struct {
 	*framework.Backend
-	client    *http.Client
-	clients   map[string]*databricks.WorkspaceClient
-	view      logical.Storage
-	lock      sync.RWMutex
-	roleLocks []*locksutil.LockEntry
-	ctx       context.Context
-	cancel    context.CancelFunc
+	client      *http.Client
+	clients     map[string]*databricks.WorkspaceClient
+	view        logical.Storage
+	lock        sync.RWMutex
+	roleLocks   []*locksutil.LockEntry
+	ctx         context.Context
+	cancel      context.CancelFunc
+	vaultClient *api.Client // Vault API client for external storage
 }
 
 func (b *DatabricksBackend) getClient() *http.Client {
@@ -41,8 +44,10 @@ func (b *DatabricksBackend) getClient() *http.Client {
 
 func (b *DatabricksBackend) getWorkspaceClient(config ConfigStorageEntry) (*databricks.WorkspaceClient, error) {
 	key := config.BaseURL + config.ClientID
+	b.lock.RLock()
 	client, exists := b.clients[key]
-	b.Logger().Info("failed to create Databricks client: ", " exists", exists)
+	b.lock.RUnlock()
+	b.Logger().Info("Checking Databricks client", "exists", exists)
 	if exists {
 		return client, nil
 	}
@@ -55,19 +60,48 @@ func (b *DatabricksBackend) getWorkspaceClient(config ConfigStorageEntry) (*data
 	}
 	client, err := databricks.NewWorkspaceClient(cfg)
 	if err != nil {
-		b.Logger().Info("failed to create Databricks client: ", " error", err)
+		b.Logger().Error("Failed to create Databricks client", "error", err)
 		return nil, fmt.Errorf("failed to create Databricks client: %v", err)
 	}
 
 	b.lock.Lock()
 	b.clients[key] = client
-	b.Logger().Info("failed to create Databricks client: ", "b.clients[key] ", b.clients[key])
 	b.lock.Unlock()
+	b.Logger().Info("Created new Databricks client", "key", key)
 	return client, nil
+}
+
+// getExternalStorage returns an adapted Vault API client for the "gtn" mount
+func (b *DatabricksBackend) getExternalStorage() (logical.Storage, error) {
+	if b.vaultClient == nil {
+		return nil, fmt.Errorf("Vault API client not initialized")
+	}
+	return &APILogicalStorage{
+		client:     b.vaultClient.Logical(),
+		mountPoint: "gtn",
+	}, nil
 }
 
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := Backend(conf)
+	token := os.Getenv("VAULT_TOKEN")
+
+	if token == "" {
+		return nil, fmt.Errorf("VAULT_TOKEN environment variable not set")
+	}
+	vaultAddr := os.Getenv("VAULT_ADDR")
+	if vaultAddr == "" {
+		return nil, fmt.Errorf("VAULT_ADDR environment variable not set")
+	}
+	client, err := api.NewClient(&api.Config{
+		Address: vaultAddr,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Vault client: %v", err)
+	}
+	client.SetToken(token)
+	b.vaultClient = client
+
 	if err := b.Setup(ctx, conf); err != nil {
 		return nil, err
 	}
@@ -127,7 +161,13 @@ func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage log
 		return
 	}
 
-	configs, err := storage.List(ctx, "config/")
+	externalStorage, err := b.getExternalStorage()
+	if err != nil {
+		b.Logger().Error("Failed to get external storage", "error", err)
+		return
+	}
+
+	configs, err := externalStorage.List(ctx, "")
 	if err != nil {
 		b.Logger().Error("Failed to list configs for rotation", "error", err)
 		return
@@ -139,14 +179,14 @@ func (b *DatabricksBackend) rotateExpiredTokens(ctx context.Context, storage log
 			break
 		}
 
-		tokens, err := storage.List(ctx, fmt.Sprintf("%s/%s/", pathPatternToken, config))
+		tokens, err := externalStorage.List(ctx, fmt.Sprintf("%s/tokens/", config))
 		if err != nil {
 			b.Logger().Error("Failed to list tokens for config", "config", config, "error", err)
 			continue
 		}
 
 		for _, tokenName := range tokens {
-			b.checkAndRotateToken(ctx, storage, config, tokenName)
+			b.checkAndRotateToken(ctx, externalStorage, config, tokenName)
 		}
 	}
 }
@@ -157,5 +197,5 @@ for managing resources. This enables users to gain access to Databricks
 without needing to manage static API tokens. Tokens are automatically
 rotated before expiration to ensure continuous access.
 
-Configure credentials using the "config/" endpoints. Generate tokens using the "token/" endpoints.
+Configure service principals using the "sp/" endpoints. Generate tokens using the "token/" endpoints.
 `
