@@ -172,8 +172,10 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 	}
 
 	return &logical.Response{
-		Data:     configDetail(config),
-		Warnings: warnings,
+		Data: configDetail(config),
+		Warnings: []string{
+			fmt.Sprintf("configuration stored under path: gtn/%s", configPath),
+		},
 	}, nil
 }
 

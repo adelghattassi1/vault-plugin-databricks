@@ -56,16 +56,14 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 }
 
 type TokenStorageEntry struct {
-	TokenName       string        `json:"token_name"`
-	TokenID         string        `json:"token_id"`
-	TokenValue      string        `json:"token_value"`
-	ApplicationID   string        `json:"application_id"`
-	Lifetime        time.Duration `json:"lifetime_seconds"`
-	Comment         string        `json:"comment"`
-	CreationTime    time.Time     `json:"creation_time"`
-	ExpiryTime      time.Time     `json:"expiry_time"`
-	Configuration   string        `json:"configuration"`
-	RotationEnabled bool          `json:"rotation_enabled"`
+	TokenName     string        `json:"token_name"`
+	TokenID       string        `json:"token_id"`
+	TokenValue    string        `json:"token_value"`
+	ApplicationID string        `json:"application_id"`
+	Lifetime      time.Duration `json:"lifetime_seconds"`
+	Comment       string        `json:"comment"`
+	CreationTime  time.Time     `json:"creation_time"`
+	ExpiryTime    time.Time     `json:"expiry_time"`
 }
 
 type ConfigStorageEntry struct {
@@ -84,8 +82,6 @@ func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 		"comment":          token.Comment,
 		"creation_time":    token.CreationTime.Format(time.RFC3339),
 		"expiry_time":      token.ExpiryTime.Format(time.RFC3339),
-		"configuration":    token.Configuration,
-		"rotation_enabled": token.RotationEnabled,
 	}
 }
 
@@ -162,16 +158,14 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 
 	tokenEntry := TokenStorageEntry{
-		TokenName:       tokenNameStr,
-		TokenID:         token.TokenInfo.TokenId,
-		TokenValue:      token.TokenValue,
-		ApplicationID:   applicationID.(string),
-		Lifetime:        time.Duration(lifetimeSeconds.(int)) * time.Second,
-		Comment:         comment,
-		CreationTime:    time.UnixMilli(token.TokenInfo.CreationTime),
-		ExpiryTime:      time.UnixMilli(token.TokenInfo.ExpiryTime),
-		Configuration:   configPath,
-		RotationEnabled: true,
+		TokenName:     tokenNameStr,
+		TokenID:       token.TokenInfo.TokenId,
+		TokenValue:    token.TokenValue,
+		ApplicationID: applicationID.(string),
+		Lifetime:      time.Duration(lifetimeSeconds.(int)) * time.Second,
+		Comment:       comment,
+		CreationTime:  time.UnixMilli(token.TokenInfo.CreationTime),
+		ExpiryTime:    time.UnixMilli(token.TokenInfo.ExpiryTime),
 	}
 
 	storageEntry, err := logical.StorageEntryJSON(tokenPath, tokenEntry)
@@ -187,6 +181,9 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	b.Logger().Info("Token created successfully", "token_name", tokenNameStr)
 	return &logical.Response{
 		Data: tokenDetail(&tokenEntry),
+		Warnings: []string{
+			fmt.Sprintf("Token stored under path: gtn/%s", tokenPath),
+		},
 	}, nil
 }
 
@@ -587,10 +584,6 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	if newLifetime, ok := d.GetOk("lifetime_seconds"); ok {
 		lifetimeSeconds = int64(newLifetime.(int))
 	}
-	rotationEnabled := token.RotationEnabled
-	if newRotationEnabled, ok := d.GetOk("rotation_enabled"); ok {
-		rotationEnabled = newRotationEnabled.(bool)
-	}
 
 	oldTokenID := token.TokenID
 	err = client.TokenManagement.DeleteByTokenId(ctx, oldTokenID)
@@ -614,9 +607,7 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	token.Lifetime = time.Duration(lifetimeSeconds) * time.Second
 	token.CreationTime = time.UnixMilli(newToken.TokenInfo.CreationTime)
 	token.ExpiryTime = time.UnixMilli(newToken.TokenInfo.ExpiryTime)
-	token.RotationEnabled = rotationEnabled
-
-	b.Logger().Info("Updated token fields", "token_name", tokenName, "token_id", token.TokenID, "comment", token.Comment, "rotation_enabled", token.RotationEnabled)
+	b.Logger().Info("Updated token fields", "token_name", tokenName, "token_id", token.TokenID, "comment", token.Comment)
 
 	newEntry, err := logical.StorageEntryJSON(tokenPath, token)
 	if err != nil {
@@ -630,5 +621,8 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 
 	return &logical.Response{
 		Data: tokenDetail(&token),
+		Warnings: []string{
+			fmt.Sprintf("Token updated and stored under path: gtn/%s", tokenPath),
+		},
 	}, nil
 }
