@@ -113,7 +113,6 @@ func (b *DatabricksBackend) pathConfigRead(ctx context.Context, req *logical.Req
 }
 
 func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	warnings := []string{}
 	name, ok := data.GetOk("application_id")
 	if !ok {
 		return nil, fmt.Errorf("name parameter not provided")
