@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"strings"
@@ -94,6 +95,22 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 	}
 	client, err := api.NewClient(&api.Config{
 		Address: vaultAddr,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Vault client: %v", err)
+	}
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // Disable TLS verification
+			},
+		},
+	}
+
+	// Initialize Vault API client with custom HTTP client
+	client, err = api.NewClient(&api.Config{
+		Address:    vaultAddr,
+		HttpClient: httpClient, // Use custom client with InsecureSkipVerify
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Vault client: %v", err)
