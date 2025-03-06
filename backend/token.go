@@ -117,7 +117,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 	comment := d.Get("comment").(string)
 
-	configPath := fmt.Sprintf("%s/%s/dbx_tokens/%s/configuration", product, environment, spName)
+	configPath := fmt.Sprintf("%s/%s/dbx_tokens/service_principals/%s/configuration", product, environment, spName)
 	externalStorage, err := b.getExternalStorage()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get external storage: %v", err)
