@@ -8,7 +8,6 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
-// getConfig retrieves the service principal configuration from the external storage
 func getConfig(ctx context.Context, s logical.Storage, data *framework.FieldData) (*ConfigStorageEntry, error) {
 	name, ok := data.GetOk("name")
 	if !ok {
@@ -23,7 +22,8 @@ func getConfig(ctx context.Context, s logical.Storage, data *framework.FieldData
 		return nil, fmt.Errorf("environment not provided")
 	}
 
-	configPath := fmt.Sprintf("%s/%s/%s", product, environment, name)
+	configPath := fmt.Sprintf("%s/%s/dbx_tokens/%s/configuration", product, environment, name)
+
 	entry, err := s.Get(ctx, configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve config from %s: %v", configPath, err)

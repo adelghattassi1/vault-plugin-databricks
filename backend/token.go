@@ -70,14 +70,10 @@ type TokenStorageEntry struct {
 	CreationTime    time.Time     `json:"creation_time"`
 	ExpiryTime      time.Time     `json:"expiry_time"`
 	Configuration   string        `json:"configuration"`
-	LastRotated     time.Time     `json:"last_rotated"`
 	RotationEnabled bool          `json:"rotation_enabled"`
 }
 
 type ConfigStorageEntry struct {
-	Product      string `json:"product"`
-	Environment  string `json:"environment"`
-	Name         string `json:"name"`
 	BaseURL      string `json:"base_url"`
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
@@ -94,7 +90,6 @@ func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
 		"creation_time":    token.CreationTime.Format(time.RFC3339),
 		"expiry_time":      token.ExpiryTime.Format(time.RFC3339),
 		"configuration":    token.Configuration,
-		"last_rotated":     token.LastRotated.Format(time.RFC3339),
 		"rotation_enabled": token.RotationEnabled,
 	}
 }
@@ -117,15 +112,17 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("token_name is required")
 	}
 	tokenNameStr := tokenName.(string)
-	applicationID := d.Get("application_id").(string)
-	lifetimeSeconds := d.Get("lifetime_seconds").(int)
+	applicationID, ok := d.GetOk("application_id")
+	if !ok {
+		return nil, fmt.Errorf("application_id is required")
+	}
+	lifetimeSeconds, ok := d.GetOk("lifetime_seconds")
+	if !ok {
+		return nil, fmt.Errorf("lifetime_seconds is required")
+	}
 	comment := d.Get("comment").(string)
 
-	if lifetimeSeconds < 60 || lifetimeSeconds > 7776000 {
-		return nil, fmt.Errorf("lifetime_seconds must be between 60 and 7776000")
-	}
-
-	configPath := fmt.Sprintf("%s/%s/%s", product, environment, spName)
+	configPath := fmt.Sprintf("%s/%s/dbx_tokens/%s/configuration", product, environment, spName)
 	externalStorage, err := b.getExternalStorage()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get external storage: %v", err)
@@ -150,7 +147,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("failed to get Databricks client: %v", err)
 	}
 
-	tokenPath := fmt.Sprintf("%s/tokens/%s", configPath, tokenNameStr)
+	tokenPath := fmt.Sprintf("%s/%s/dbx_tokens/service_principals/%s/%s", product, environment, spName, tokenNameStr)
 	existingEntry, err := externalStorage.Get(ctx, tokenPath)
 	if err != nil {
 		return nil, fmt.Errorf("error checking existing token: %v", err)
@@ -160,9 +157,9 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 
 	token, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
-		ApplicationId:   applicationID,
+		ApplicationId:   applicationID.(string),
 		Comment:         comment,
-		LifetimeSeconds: int64(lifetimeSeconds),
+		LifetimeSeconds: int64(lifetimeSeconds.(int)),
 	})
 	if err != nil {
 		b.Logger().Error("Failed to create OBO token", "error", err)
@@ -173,13 +170,12 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		TokenName:       tokenNameStr,
 		TokenID:         token.TokenInfo.TokenId,
 		TokenValue:      token.TokenValue,
-		ApplicationID:   applicationID,
-		Lifetime:        time.Duration(lifetimeSeconds) * time.Second,
+		ApplicationID:   applicationID.(string),
+		Lifetime:        time.Duration(lifetimeSeconds.(int)) * time.Second,
 		Comment:         comment,
 		CreationTime:    time.UnixMilli(token.TokenInfo.CreationTime),
 		ExpiryTime:      time.UnixMilli(token.TokenInfo.ExpiryTime),
 		Configuration:   configPath,
-		LastRotated:     time.Now(),
 		RotationEnabled: true,
 	}
 
@@ -291,7 +287,6 @@ func (b *DatabricksBackend) checkAndRotateToken(ctx context.Context, storage log
 	token.TokenValue = newToken.TokenValue
 	token.CreationTime = time.UnixMilli(newToken.TokenInfo.CreationTime)
 	token.ExpiryTime = time.UnixMilli(newToken.TokenInfo.ExpiryTime)
-	token.LastRotated = now
 
 	newEntry, err := logical.StorageEntryJSON(path, token)
 	if err != nil {
@@ -392,8 +387,8 @@ func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Re
 	if err != nil {
 		return nil, fmt.Errorf("failed to get external storage: %v", err)
 	}
-
-	tokenPath := fmt.Sprintf("%s/%s/%s/tokens/%s", product, environment, spName, tokenName)
+	configPath := fmt.Sprintf("%s/%s", product, environment)
+	tokenPath := fmt.Sprintf("%s/dbx_tokens/service_principals/%s/%s", configPath, spName, tokenName)
 	entry, err := externalStorage.Get(ctx, tokenPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read token: %v", err)
@@ -430,8 +425,8 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("token_name not provided")
 	}
 
-	configPath := fmt.Sprintf("%s/%s/%s", product, environment, spName)
-	tokenPath := fmt.Sprintf("%s/tokens/%s", configPath, tokenName)
+	configPath := fmt.Sprintf("%s/%s", product, environment)
+	tokenPath := fmt.Sprintf("%s/dbx_tokens/service_principals/%s/%s", configPath, spName, tokenName)
 
 	externalStorage, err := b.getExternalStorage()
 	if err != nil {
@@ -550,8 +545,8 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("token_name not provided")
 	}
 
-	configPath := fmt.Sprintf("%s/%s/%s", product, environment, spName)
-	tokenPath := fmt.Sprintf("%s/tokens/%s", configPath, tokenName)
+	configPath := fmt.Sprintf("%s/%s", product, environment)
+	tokenPath := fmt.Sprintf("%s/dbx_tokens/service_principals/%s/%s", configPath, spName, tokenName)
 	b.Logger().Info("Updating token", "path", tokenPath)
 
 	externalStorage, err := b.getExternalStorage()
@@ -623,7 +618,6 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	token.Lifetime = time.Duration(lifetimeSeconds) * time.Second
 	token.CreationTime = time.UnixMilli(newToken.TokenInfo.CreationTime)
 	token.ExpiryTime = time.UnixMilli(newToken.TokenInfo.ExpiryTime)
-	token.LastRotated = time.Now()
 	token.RotationEnabled = rotationEnabled
 
 	b.Logger().Info("Updated token fields", "token_name", tokenName, "token_id", token.TokenID, "comment", token.Comment, "rotation_enabled", token.RotationEnabled)

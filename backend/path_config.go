@@ -26,7 +26,6 @@ func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.
 	}, nil
 }
 
-// schema for configuring the Databricks token plugin
 var configSchema = map[string]*framework.FieldSchema{
 	"name": {
 		Type:        framework.TypeString,
@@ -62,8 +61,6 @@ var configSchema = map[string]*framework.FieldSchema{
 
 func configDetail(config *ConfigStorageEntry) map[string]interface{} {
 	return map[string]interface{}{
-		"product":       config.Product,
-		"environment":   config.Environment,
 		"base_url":      config.BaseURL,
 		"client_id":     config.ClientID,
 		"client_secret": "********",
@@ -84,7 +81,7 @@ func (b *DatabricksBackend) handleDeleteConfig(ctx context.Context, req *logical
 		return nil, fmt.Errorf("environment not provided")
 	}
 
-	configPath := fmt.Sprintf("%s/%s/%s", product, environment, name)
+	configPath := fmt.Sprintf("%s/%s/dbx_tokens/%s/configuration", product, environment, name)
 	externalStorage, err := b.getExternalStorage()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get external storage: %v", err)
@@ -130,7 +127,7 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 		return nil, fmt.Errorf("environment parameter not provided")
 	}
 
-	configPath := fmt.Sprintf("%s/%s/%s", product, environment, name)
+	configPath := fmt.Sprintf("%s/%s/dbx_tokens/%s/configuration", product, environment, name)
 	externalStorage, err := b.getExternalStorage()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get external storage: %v", err)
@@ -143,9 +140,6 @@ func (b *DatabricksBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 	if config == nil {
 		config = &ConfigStorageEntry{}
 	}
-
-	config.Product = product.(string)
-	config.Environment = environment.(string)
 
 	baseURL, ok := data.GetOk("base_url")
 	if ok {
@@ -231,6 +225,7 @@ Configure the Databricks backend with service principal credentials.
 const pathConfigHelpDesc = `
 The Databricks backend requires OAuth credentials (client_id and client_secret) for creating access tokens via M2M authentication.
 This endpoint configures service principal credentials under a product and environment, stored in the external "gtn" mount.
+The product and environment are used in the path structure but not stored as secret data.
 `
 
 var configExamples = []framework.RequestExample{
