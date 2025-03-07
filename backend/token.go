@@ -61,14 +61,14 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 }
 
 type TokenStorageEntry struct {
-	TokenName     string        `json:"token_name"`
-	TokenID       string        `json:"token_id"`
-	TokenValue    string        `json:"token_value"`
-	ApplicationID string        `json:"application_id"`
-	Lifetime      time.Duration `json:"lifetime_seconds"`
-	Comment       string        `json:"comment"`
-	CreationTime  time.Time     `json:"creation_time"`
-	ExpiryTime    time.Time     `json:"expiry_time"`
+	TokenName     string    `json:"token_name"`
+	TokenID       string    `json:"token_id"`
+	TokenValue    string    `json:"token_value"`
+	ApplicationID string    `json:"application_id"`
+	Lifetime      int64     `json:"lifetime_seconds"`
+	Comment       string    `json:"comment"`
+	CreationTime  time.Time `json:"creation_time"`
+	ExpiryTime    time.Time `json:"expiry_time"`
 }
 
 type ConfigStorageEntry struct {
@@ -78,8 +78,7 @@ type ConfigStorageEntry struct {
 }
 
 func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
-	lifetimeSeconds := int64(token.Lifetime / time.Second)
-	lifetimeYears := float64(lifetimeSeconds) / float64(secondsPerYear)
+	lifetimeYears := float64(token.Lifetime) / float64(secondsPerYear)
 	return map[string]interface{}{
 		"token_name":     token.TokenName,
 		"token_id":       token.TokenID,
@@ -118,6 +117,8 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	if !ok {
 		lifetimeSeconds = defaultLifetimeYears * secondsPerYear // 315,360,000 seconds
 	}
+	lifetimeSecondsInt := int64(lifetimeSeconds.(int))
+	b.Logger().Debug("Lifetime seconds set", "value", lifetimeSecondsInt)
 	comment := d.Get("comment").(string)
 
 	configPath := fmt.Sprintf("%s/%s/dbx_tokens/service_principals/%s/configuration", product, environment, spName)
@@ -157,7 +158,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	token, err := client.TokenManagement.CreateOboToken(ctx, settings.CreateOboTokenRequest{
 		ApplicationId:   applicationID.(string),
 		Comment:         comment,
-		LifetimeSeconds: int64(lifetimeSeconds.(int)),
+		LifetimeSeconds: lifetimeSecondsInt,
 	})
 	if err != nil {
 		b.Logger().Error("Failed to create OBO token", "error", err)
@@ -169,7 +170,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 		TokenID:       token.TokenInfo.TokenId,
 		TokenValue:    token.TokenValue,
 		ApplicationID: applicationID.(string),
-		Lifetime:      time.Duration(lifetimeSeconds.(int)) * time.Second,
+		Lifetime:      lifetimeSecondsInt,
 		Comment:       comment,
 		CreationTime:  time.UnixMilli(token.TokenInfo.CreationTime),
 		ExpiryTime:    time.UnixMilli(token.TokenInfo.ExpiryTime),
@@ -587,7 +588,7 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	if newComment, ok := d.GetOk("comment"); ok {
 		comment = newComment.(string)
 	}
-	lifetimeSeconds := int64(token.Lifetime / time.Second)
+	lifetimeSeconds := token.Lifetime
 	if newLifetime, ok := d.GetOk("lifetime_seconds"); ok {
 		lifetimeSeconds = int64(newLifetime.(int))
 	}
@@ -611,7 +612,7 @@ func (b *DatabricksBackend) handleUpdateToken(ctx context.Context, req *logical.
 	token.TokenID = newToken.TokenInfo.TokenId
 	token.TokenValue = newToken.TokenValue
 	token.Comment = comment
-	token.Lifetime = time.Duration(lifetimeSeconds) * time.Second
+	token.Lifetime = lifetimeSeconds
 	token.CreationTime = time.UnixMilli(newToken.TokenInfo.CreationTime)
 	token.ExpiryTime = time.UnixMilli(newToken.TokenInfo.ExpiryTime)
 	b.Logger().Info("Updated token fields", "token_name", tokenName, "token_id", token.TokenID, "comment", token.Comment)
