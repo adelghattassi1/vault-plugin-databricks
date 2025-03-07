@@ -11,6 +11,11 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
+const (
+	defaultLifetimeYears = 10
+	secondsPerYear       = 365 * 24 * 60 * 60 // 31,536,000 seconds
+)
+
 func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 	return []*framework.Path{
 		{
@@ -39,7 +44,7 @@ func pathCreateToken(b *DatabricksBackend) []*framework.Path {
 				"lifetime_seconds": {
 					Type:        framework.TypeInt,
 					Description: "The number of seconds before the token expires.",
-					Required:    true,
+					Default:     defaultLifetimeYears * secondsPerYear, // 315,360,000 seconds
 				},
 				"comment": {
 					Type:        framework.TypeString,
@@ -73,15 +78,17 @@ type ConfigStorageEntry struct {
 }
 
 func tokenDetail(token *TokenStorageEntry) map[string]interface{} {
+	lifetimeSeconds := int64(token.Lifetime / time.Second)
+	lifetimeYears := float64(lifetimeSeconds) / float64(secondsPerYear)
 	return map[string]interface{}{
-		"token_name":       token.TokenName,
-		"token_id":         token.TokenID,
-		"token_value":      token.TokenValue,
-		"application_id":   token.ApplicationID,
-		"lifetime_seconds": int64(token.Lifetime / time.Second),
-		"comment":          token.Comment,
-		"creation_time":    token.CreationTime.Format(time.RFC3339),
-		"expiry_time":      token.ExpiryTime.Format(time.RFC3339),
+		"token_name":     token.TokenName,
+		"token_id":       token.TokenID,
+		"token_value":    token.TokenValue,
+		"application_id": token.ApplicationID,
+		"lifetime_years": lifetimeYears,
+		"comment":        token.Comment,
+		"creation_time":  token.CreationTime.Format(time.RFC3339),
+		"expiry_time":    token.ExpiryTime.Format(time.RFC3339),
 	}
 }
 
@@ -109,7 +116,7 @@ func (b *DatabricksBackend) handleCreateToken(ctx context.Context, req *logical.
 	}
 	lifetimeSeconds, ok := d.GetOk("lifetime_seconds")
 	if !ok {
-		return nil, fmt.Errorf("lifetime_seconds is required")
+		lifetimeSeconds = defaultLifetimeYears * secondsPerYear // 315,360,000 seconds
 	}
 	comment := d.Get("comment").(string)
 
