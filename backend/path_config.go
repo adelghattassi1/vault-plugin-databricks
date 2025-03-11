@@ -12,7 +12,17 @@ func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.
 	if err != nil {
 		return nil, fmt.Errorf("failed to get external storage: %v", err)
 	}
-	configs, err := externalStorage.List(ctx, "")
+	product, ok := d.GetOk("product")
+	if !ok {
+		return nil, fmt.Errorf("product parameter not provided")
+	}
+	environment, ok := d.GetOk("environment")
+	if !ok {
+		return nil, fmt.Errorf("environment parameter not provided")
+	}
+
+	configPath := fmt.Sprintf("%s/%s/dbx_tokens/service_principals", product, environment)
+	configs, err := externalStorage.List(ctx, configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list config entries: %v", err)
 	}
@@ -205,7 +215,7 @@ func pathConfig(b *DatabricksBackend) []*framework.Path {
 func pathConfigList(b *DatabricksBackend) []*framework.Path {
 	paths := []*framework.Path{
 		{
-			Pattern: "configs/",
+			Pattern: "configs/(?P<product>.+)/(?P<environment>.+)",
 			Fields:  configSchema,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
