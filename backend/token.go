@@ -356,6 +356,9 @@ func (b *DatabricksBackend) handleReadToken(ctx context.Context, req *logical.Re
 
 	return &logical.Response{
 		Data: tokenDetail(&tokenData),
+		Warnings: []string{
+			fmt.Sprintf("Actual token path in the gtn/ mount point is: gtn/%s", tokenPath),
+		},
 	}, nil
 }
 
@@ -476,6 +479,9 @@ func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.R
 	return &logical.Response{
 		Data: map[string]interface{}{
 			"keys": tokens,
+		},
+		Warnings: []string{
+			fmt.Sprintf("Actual path in the gtn/ mount point is: gtn/%s", tokenPrefix),
 		},
 	}, nil
 }

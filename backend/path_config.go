@@ -33,6 +33,9 @@ func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.
 
 	return &logical.Response{
 		Data: responseData,
+		Warnings: []string{
+			fmt.Sprintf("configuration stored under path: gtn/%s", configPath),
+		},
 	}, nil
 }
 
