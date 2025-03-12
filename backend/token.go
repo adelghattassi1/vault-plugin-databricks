@@ -377,38 +377,38 @@ func (b *DatabricksBackend) handleDeleteToken(ctx context.Context, req *logical.
 		return nil, fmt.Errorf("token_name not provided")
 	}
 
-	configPath := fmt.Sprintf("%s/%s", product, environment)
-	tokenPath := fmt.Sprintf("%s/dbx_tokens/service_principals/%s/%s", configPath, spName, tokenName)
+	//configPath := fmt.Sprintf("%s/%s/dbx_tokens/service_principals/%s/configuration", product, environment, spName)
+	tokenPath := fmt.Sprintf("%s/%s/dbx_tokens/service_principals/%s/%s", product, environment, spName, tokenName)
 
 	externalStorage, err := b.getExternalStorage()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get external storage: %v", err)
 	}
 
-	configEntry, err := externalStorage.Get(ctx, configPath)
-	if err != nil || configEntry == nil {
-		return nil, fmt.Errorf("failed to retrieve configuration: %v", err)
-	}
-	var config ConfigStorageEntry
-	if err := json.Unmarshal(configEntry.Value, &config); err != nil {
-		return nil, fmt.Errorf("error decoding configuration: %v", err)
-	}
+	//configEntry, err := externalStorage.Get(ctx, configPath)
+	//if err != nil || configEntry == nil {
+	//	return nil, fmt.Errorf("failed to retrieve configuration: %v", err)
+	//}
+	//var config ConfigStorageEntry
+	//if err := json.Unmarshal(configEntry.Value, &config); err != nil {
+	//	return nil, fmt.Errorf("error decoding configuration: %v", err)
+	//}
 
-	client, err := b.getWorkspaceClient(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Databricks client: %v", err)
-	}
+	//client, err := b.getWorkspaceClient(config)
+	//if err != nil {
+	//	return nil, fmt.Errorf("failed to get Databricks client: %v", err)
+	//}
 
-	entry, err := externalStorage.Get(ctx, tokenPath)
-	if err == nil && entry != nil {
-		var token TokenStorageEntry
-		if err := json.Unmarshal(entry.Value, &token); err == nil {
-			err = client.TokenManagement.DeleteByTokenId(ctx, token.TokenID)
-			if err != nil {
-				b.Logger().Warn("Failed to revoke token during deletion", "error", err)
-			}
-		}
-	}
+	//entry, err := externalStorage.Get(ctx, tokenPath)
+	//if err == nil && entry != nil {
+	//	var token TokenStorageEntry
+	//	if err := json.Unmarshal(entry.Value, &token); err == nil {
+	//		err = client.TokenManagement.DeleteByTokenId(ctx, token.TokenID)
+	//		if err != nil {
+	//			b.Logger().Warn("Failed to revoke token during deletion", "error", err)
+	//		}
+	//	}
+	//}
 
 	if err := externalStorage.Delete(ctx, tokenPath); err != nil {
 		return nil, fmt.Errorf("failed to delete token: %v", err)
