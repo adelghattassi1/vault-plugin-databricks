@@ -515,7 +515,7 @@ func (b *DatabricksBackend) handleListTokens(ctx context.Context, req *logical.R
 	}
 
 	configPath := fmt.Sprintf("%s/%s", product, environment)
-	tokenPrefix := fmt.Sprintf("%s/dbx_tokens/service_principals/%s/%s", configPath, spName)
+	tokenPrefix := fmt.Sprintf("%s/dbx_tokens/service_principals/%s", configPath, spName)
 	tokens, err := externalStorage.List(ctx, tokenPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens: %v", err)
