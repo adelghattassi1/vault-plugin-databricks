@@ -86,13 +86,21 @@ func (s *APILogicalStorage) List(ctx context.Context, prefix string) ([]string, 
 	return result, nil
 }
 
-// Delete removes a storage entry from the external "gtn" mount
+// Delete removes a storage entry and its metadata from the external "gtn" mount
 func (s *APILogicalStorage) Delete(ctx context.Context, key string) error {
-	// For KV v2, delete from /data/
-	path := s.mountPoint + "/data/" + key
-	_, err := s.client.DeleteWithContext(ctx, path)
+	// Delete the secret data from /data/
+	dataPath := s.mountPoint + "/data/" + key
+	_, err := s.client.DeleteWithContext(ctx, dataPath)
 	if err != nil {
-		return fmt.Errorf("failed to delete %s: %v", path, err)
+		return fmt.Errorf("failed to delete data at %s: %v", dataPath, err)
 	}
+
+	// Delete the metadata from /metadata/
+	metadataPath := s.mountPoint + "/metadata/" + key
+	_, err = s.client.DeleteWithContext(ctx, metadataPath)
+	if err != nil {
+		return fmt.Errorf("failed to delete metadata at %s: %v", metadataPath, err)
+	}
+
 	return nil
 }
