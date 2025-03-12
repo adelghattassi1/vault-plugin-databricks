@@ -28,7 +28,7 @@ func (b *DatabricksBackend) listConfigEntries(ctx context.Context, req *logical.
 	}
 
 	responseData := map[string]interface{}{
-		"config_entries": configs,
+		"keys": configs,
 	}
 
 	return &logical.Response{
