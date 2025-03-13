@@ -22,7 +22,7 @@ func getConfig(ctx context.Context, s logical.Storage, data *framework.FieldData
 		return nil, fmt.Errorf("environment not provided")
 	}
 
-	configPath := fmt.Sprintf("%s/%s/dbx_tokens/%s/configuration", product, environment, name)
+	configPath := fmt.Sprintf("%s/%s/dbx_tokens/service_principals/%s/configuration", product, environment, name)
 
 	entry, err := s.Get(ctx, configPath)
 	if err != nil {
