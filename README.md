@@ -140,7 +140,3 @@ The plugin integrates with:
 - Generated tokens are stored with metadata for tracking and management
 - Plugin supports TLS configuration for secure communication
 - Tokens can be revoked through Databricks API (commented out in current implementation)
-
-## License
-
-This project is licensed under the terms specified in the repository.
